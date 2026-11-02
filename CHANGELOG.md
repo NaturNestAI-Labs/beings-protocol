@@ -16,6 +16,12 @@ Field fixes from Beings running on teammates' boxes, and patterns proven on a Be
 - **Heavy-task lock** (`skills/runner/heavy-lock`): one heavy task per box, waits for free memory and low swap.
 - **`<being> update`** and `install.sh --ref <tag|branch>`: pull a release or branch from GitHub, show the changelog
   entries first, re-apply the installed components (`.beings/.kit-components`).
+- **Update watcher** (`skills/runner/being-update`, daily `<being>-update.timer`, off until enabled): a new release
+  on GitHub becomes one message to the owner listing its bug fixes and new features. The owner replies
+  `UPDATE vX.Y.Z` (or `skip vX.Y.Z`) in the 1:1, routed without a model. The Being then updates itself (rollback tag
+  `pre-update-vX.Y.Z`), keeps locally changed files, runs `doctor` and `verify.sh`, and reports. When something fails
+  it opens a pull request on the protocol repo with a sanitised problem report (`BEING_UPDATE_REPORT=pr`; needs `gh`
+  signed in, and `publish-check` must pass), and tells the owner the link.
 - **Install manifest** (`.kit-manifest`): staged upgrades are labelled in `.kit-upgrade/CHANGES.txt` as "upstream only"
   or "LOCAL CHANGES", so owner-approved local edits are never swapped out blindly.
 - `harden-box.sh --rdp gnome|xrdp`: xrdp on Ubuntu 24.04, where GNOME's system-mode RDP cannot hand over to the login screen.

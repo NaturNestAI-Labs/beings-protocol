@@ -32,7 +32,12 @@ bin/nova update                  # same, then asks and applies (--yes for no pro
 bin/nova update --ref v0.5.0     # a specific release (or a branch name, e.g. a pull-request branch)
 ```
 
-It re-applies the components installed before (`.beings/.kit-components`). Underneath it runs `install.sh --update`,
+To have the Being watch for releases and ask its owner, enable the runner's timer
+(`systemctl --user enable --now <being>-update.timer`, `skills/runner/README.md`): the owner gets one message per new
+version with its fixes and features, replies `UPDATE vX.Y.Z`, and the Being updates itself, checks itself, and opens a
+pull request here with a sanitised report if anything went wrong.
+
+`update` re-applies the components installed before (`.beings/.kit-components`). Underneath it runs `install.sh --update`,
 which you can also run by hand in the Being's home:
 
 ```bash

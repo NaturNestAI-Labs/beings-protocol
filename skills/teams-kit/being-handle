@@ -733,15 +733,24 @@ for l in open(f):
     c=re.match(r"^(send|skip|edit|save)\s+(D\d+)\b", t, re.I)
     b=re.match(r"^(SEND|skip)(?:\s+(B\d+))?\s*$", t)   # batch: uppercase SEND [Bn] or skip Bn (send-batch.mjs)
     if b and b.group(1)=="skip" and not b.group(2): b=None
-    if owner and m.get("lane")!="owner" and m.get("fromId")==owner and m.get("chatType")=="oneOnOne" and (c or b) and m.get("messageId"):
-        if b: print("batch-"+b.group(1).lower(), b.group(2) or "-", m["messageId"], m["chatId"], sep="\t")
+    u=re.match(r"^(UPDATE|skip)\s+v(\d+\.\d+\.\d+)\s*$", t)   # kit release offered by being-update; uppercase UPDATE only
+    if u: b=None
+    if owner and m.get("lane")!="owner" and m.get("fromId")==owner and m.get("chatType")=="oneOnOne" and (c or b or u) and m.get("messageId"):
+        if u: print("kit-"+u.group(1).lower(), u.group(2), m["messageId"], m["chatId"], sep="\t")
+        elif b: print("batch-"+b.group(1).lower(), b.group(2) or "-", m["messageId"], m["chatId"], sep="\t")
         else: print(c.group(1).lower(), c.group(2).upper(), m["messageId"], m["chatId"], sep="\t")
         open(acked,"a").write(m["messageId"]+"\n")
     else: keep.append(l)
 open(f,"w").writelines(keep)
 PY
       log "owner decision: $verb $id"
-      if [[ $verb == batch-* ]]; then
+      if [[ $verb == kit-* ]]; then   # the update runs detached: it reinstalls the kit this handler runs from
+        upd="$WORKSPACE/ops/runner/being-update"; [[ -x $upd ]] || upd="$(command -v being-update || true)"
+        if [[ -n $upd ]]; then
+          if [[ $verb == kit-update ]]; then BEING_WORKSPACE="$WORKSPACE" setsid "$upd" apply "$id" </dev/null >>"$STATE/being-update.log" 2>&1 &
+          else BEING_WORKSPACE="$WORKSPACE" "$upd" skip "$id" </dev/null >>"$STATE/being-update.log" 2>&1 || true; fi
+        else log "owner decision $verb $id: being-update not installed"; fi
+      elif [[ $verb == batch-* ]]; then
         bargs=("${verb#batch-}"); [[ $id == - ]] || bargs+=("$id")
         node "$KIT/send-batch.mjs" "${bargs[@]}" --chat "$cid" --msg "$mid" </dev/null 2>>"$HLOG" || true
       else node "$KIT/approve.mjs" "$verb" "$id" --chat "$cid" --msg "$mid" </dev/null 2>>"$HLOG" || true; fi

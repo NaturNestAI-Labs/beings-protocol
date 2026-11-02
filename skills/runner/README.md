@@ -8,6 +8,7 @@ For a Being that has its own messaging scripts (or none yet). With the Teams kit
 | `being-job` | Runs long work that must outlive a reply: headless Claude, Codex or any command; writes a result file |
 | `being-blocker` | Tells the owner at once that a step is blocked, instead of retrying |
 | `heavy-lock` | `heavy-lock <name> -- <cmd>`: one heavy task (render, big build, browser fleet) at a time box-wide; waits for free memory (`HEAVY_MIN_GB`, `HEAVY_MAX_SWAP_PCT`), exit 75 after `HEAVY_TIMEOUT_MIN` |
+| `being-update` | `check` (daily timer `<being>-update.timer`): a new release on GitHub → one message to the owner with its bug fixes and new features, once per version. The owner replies `UPDATE vX.Y.Z` (or `skip vX.Y.Z`) in the 1:1; then `apply` updates, keeps locally changed files, runs `doctor` and `verify.sh`, reports back, and on problems opens a pull request with a sanitised report (`BEING_UPDATE_REPORT=pr`, needs `gh` signed in and `publish-check`) |
 | `being-heartbeat` | Nudges the main tmux session every 30 min, or when a job finishes |
 | `env.example` | Settings (`~/.config/being-runner/env`, 0600) |
 | `templates/kit/units/` | `<being>-session.service` (tmux), `<being>-poller.service`, `<being>-heartbeat.service/.timer` |

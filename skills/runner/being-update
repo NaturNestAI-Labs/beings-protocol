@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# being-update check | apply <X.Y.Z> | skip <X.Y.Z> | status: watch the protocol repo for a new release, ask the owner,
+# and update only after the owner types "UPDATE vX.Y.Z". Problems found while updating go to the owner and, as a PR, to the repo.
+set -euo pipefail
+export PATH="$HOME/.local/bin:$PATH"
+ENVF="${BEING_RUNNER_ENV:-$HOME/.config/being-runner/env}"
+keep="$(declare -px | grep -E '^declare -x BEING_' || true)"
+# shellcheck source=/dev/null
+set -a; [[ -f "$ENVF" ]] && . "$ENVF"; set +a; eval "$keep"
+HOME_DIR="${BEING_WORKSPACE:?set BEING_WORKSPACE in $ENVF}"
+# One state folder whoever calls (the daily timer or the Teams handler), so the owner's UPDATE finds the offer.
+STATE="${BEING_UPDATE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/beings-update/$(basename "$HOME_DIR")}"
+REF="${BEING_UPDATE_REF:-main}"                         # where new releases are announced
+REPO="${BEING_UPDATE_REPO:-VeltriaAI/beings-protocol}"  # where problem reports go as pull requests
+REPORT="${BEING_UPDATE_REPORT:-pr}"                     # pr | off
+mkdir -p "$STATE"; chmod 700 "$STATE"; umask 077
+LAUNCHER="$(ls "$HOME_DIR"/bin/* 2>/dev/null | while read -r f; do grep -q '^cmd_update()' "$f" 2>/dev/null && { echo "$f"; break; }; done)"
+[[ -n "$LAUNCHER" ]] || { echo "no launcher with 'update' in $HOME_DIR/bin (install.sh --update --with operations)" >&2; exit 2; }
+OFFER="$STATE/offered.json"
+
+say_owner() {   # HTML on stdin to the owner: BEING_UPDATE_SEND, else BEING_BLOCKER_SEND, else the Teams kit 1:1
+  local cmd="${BEING_UPDATE_SEND:-${BEING_BLOCKER_SEND:-}}" k="$HOME_DIR/ops/teams-kit"
+  if [[ -n "$cmd" ]]; then read -ra c <<<"$cmd"; "${c[@]}" >/dev/null
+  elif [[ -f "$k/teams-send-dm.mjs" ]]; then
+    local chat; chat="$(set -a; . "$k/.env" >/dev/null 2>&1; printf '%s' "${OWNER_DM_CHAT:-}")"
+    [[ -n "$chat" ]] || { echo "no OWNER_DM_CHAT in the Teams kit .env" >&2; return 1; }
+    (cd "$k" && node teams-send-dm.mjs --chat "$chat" >/dev/null)
+  else cat >>"$STATE/unsent.html"; echo "no sender set (BEING_UPDATE_SEND); message kept in $STATE/unsent.html" >&2; fi
+}
+esc() { python3 -c 'import html,sys; print(html.escape(sys.argv[1]))' "$1"; }
+jget() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' "$1" "$2" 2>/dev/null || true; }
+
+# Changelog entries newer than installed -> "fixes" and "features" bullet lists (plain text, first lines only).
+summarise() {
+  python3 - "$1" <<'PY'
+import re, sys
+kind, out = None, {"fixed": [], "added": [], "changed": []}
+for l in open(sys.argv[1], encoding="utf-8"):
+    m = re.match(r"^###\s+(Added|Changed|Fixed)", l)
+    if m: kind = m.group(1).lower(); continue
+    if l.startswith("## "): kind = None
+    if kind and l.startswith("- "):
+        t = re.sub(r"[*`]", "", l[2:].strip())
+        out[kind].append(t.split(": ")[0] if ": " in t[:60] else t[:90])
+for k in ("fixed", "added", "changed"):
+    print(k + "\t" + str(len(out[k])) + "\t" + "; ".join(out[k][:6]))
+PY
+}
+
+cmd_check() {
+  local out rc rv lv
+  rc=0; out="$("$LAUNCHER" update --check --ref "$REF" 2>&1)" || rc=$?
+  [[ $rc == 0 ]] && { echo "up to date"; return 0; }
+  [[ $rc == 10 ]] || { echo "update check failed (rc $rc): $(tail -1 <<<"$out")" >&2; return 1; }
+  lv="$(sed -n 's/^installed: protocol \([0-9.]*\),.*/\1/p' <<<"$out")"
+  rv="$(sed -n "s/^$REF: protocol \([0-9.]*\),.*/\1/p" <<<"$out" | head -1)"
+  [[ $rv =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "could not read the new version" >&2; return 1; }
+  if [[ "$(jget "$OFFER" version)" == "$rv" ]]; then echo "v$rv already offered to the owner"; return 0; fi
+  grep -qx "$rv" "$STATE/skipped.txt" 2>/dev/null && { echo "v$rv was skipped by the owner"; return 0; }
+  printf '%s\n' "$out" >"$STATE/changelog-$rv.txt"
+  local fixed added changed
+  while IFS=$'\t' read -r k n items; do
+    case $k in fixed) fixed="$n|$items" ;; added) added="$n|$items" ;; changed) changed="$n|$items" ;; esac
+  done < <(summarise "$STATE/changelog-$rv.txt")
+  {
+    printf '<p>🆕 <b>New Beings kit version v%s</b> is out (I run v%s).</p>' "$(esc "$rv")" "$(esc "$lv")"
+    printf '<p><b>Bug fixes (%s):</b> %s</p>' "${fixed%%|*}" "$(esc "${fixed#*|}")"
+    printf '<p><b>New features (%s):</b> %s</p>' "${added%%|*}" "$(esc "${added#*|}")"
+    if [[ "${changed%%|*}" != 0 ]]; then printf '<p><b>Changed (%s):</b> %s</p>' "${changed%%|*}" "$(esc "${changed#*|}")"; fi
+    printf '<p>Reply <b>UPDATE v%s</b> and I update myself, keep files you changed, run my checks and tell you the result. ' "$(esc "$rv")"
+    if [[ $REPORT == pr ]]; then printf 'If something breaks I also open a pull request on the protocol repo describing the problem (no names, hosts or secrets). '; fi
+    printf 'Reply <b>skip v%s</b> to stay on v%s.</p>' "$(esc "$rv")" "$(esc "$lv")"
+  } | say_owner
+  python3 -c 'import json,sys,datetime; json.dump({"version":sys.argv[2],"from":sys.argv[3],"offered_at":datetime.datetime.now().astimezone().isoformat()},open(sys.argv[1],"w"))' \
+    "$OFFER" "$rv" "$lv"
+  echo "offered v$rv to the owner"
+}
+
+sanitise() {   # report text safe for a public repo: no addresses, hosts, people, paths or secret-shaped strings
+  # The script comes from -c (a heredoc would take stdin away from the report).
+  python3 -c "$SANITISE_PY" "$HOME_DIR" "$HOME"
+}
+SANITISE_PY=$(cat <<'PY'
+import re, sys
+home_dir, home = sys.argv[1], sys.argv[2]
+t = sys.stdin.read().replace(home_dir, "<being-home>").replace(home, "~")
+for pat, rep in [(r"[\w.+-]+@[\w-]+(\.[\w-]+)+", "<email>"), (r"\b\d{1,3}(\.\d{1,3}){3}(/\d+)?\b", "<ip>"),
+                 (r"\b(?:[\w-]+\.)+(?:com|net|org|io|ai|cloud|in|dev|local|lan)\b", "<host>"),
+                 (r"\b19:[\w@.-]{8,}", "<chat>"), (r"\beyJ[\w-]+\.[\w-]+\.[\w-]+", "<token>"),
+                 (r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", "<id>"),
+                 (r"(?i)\b(gh[pousr]_|sk-|xox[abp]-)[\w-]{10,}", "<token>"),
+                 (r"(?i)((?:pass(?:word)?|secret|token|key)\s*[=:]\s*)\S+", r"\1<redacted>")]:
+    t = re.sub(pat, rep, t)
+sys.stdout.write(t)
+PY
+)
+
+open_pr() {   # open_pr <version> <report.md>: fork, branch, add the report, secret gate, push, PR. Prints the URL.
+  local v="$1" rep="$2" w br user gate
+  command -v gh >/dev/null && gh auth status >/dev/null 2>&1 || { echo "gh not signed in" >&2; return 1; }
+  user="$(gh api user --jq .login)"; br="update-report/v$v-$(date +%Y%m%d-%H%M%S)"
+  w="$(mktemp -d)"; trap 'rm -rf "$w"' RETURN
+  gh repo fork "$REPO" --clone=false >/dev/null 2>&1 || true
+  git clone -q --depth 1 "https://github.com/$user/${REPO#*/}.git" "$w/r" || return 1
+  git -C "$w/r" checkout -q -b "$br"
+  mkdir -p "$w/r/reports/update-issues"; cp "$rep" "$w/r/reports/update-issues/$(date +%F)-v$v-$RANDOM.md"
+  git -C "$w/r" add reports && git -C "$w/r" -c user.name="$user" -c user.email="$user@users.noreply.github.com" commit -q -m "Update report: problems updating to v$v"
+  gate="$(ls "$HOME_DIR/bin/publish-check" "$HOME_DIR/ops/guards/publish-check.sh" 2>/dev/null | head -1)"
+  [[ -n "$gate" ]] || { echo "publish-check not installed: no public push (fail closed)" >&2; return 1; }
+  (cd "$w/r" && "$gate" HEAD~1..HEAD) >&2 || { echo "publish-check refused the report" >&2; return 1; }
+  git -C "$w/r" push -q origin "$br" || return 1
+  gh pr create --repo "$REPO" --head "$user:$br" --title "Update to v$v: problems found" --body-file "$rep"
+}
+
+cmd_apply() {
+  local v="${1:?apply needs a version}" force="${2:-}" d log before rc issues=() lc
+  v="${v#v}"; [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "bad version $v" >&2; exit 2; }
+  # Only a version the owner was offered (the owner's UPDATE reply names it); --force is for the owner at a terminal.
+  [[ "$(jget "$OFFER" version)" == "$v" || $force == --force ]] || { echo "v$v was not offered to the owner" >&2; exit 3; }
+  exec 9>"$STATE/apply.lock"; flock -n 9 || { echo "an update is already running" >&2; exit 4; }
+  d="$STATE/v$v-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$d"; log="$d/update.log"
+  before="$(cat "$HOME_DIR/.beings/.protocol-version" 2>/dev/null || echo 0.0.0)"
+  # Rollback point: a local tag on the Being's home repo (uncommitted files are listed, not touched).
+  if git -C "$HOME_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    git -C "$HOME_DIR" tag -f "pre-update-v$v" >/dev/null 2>&1 || true
+    git -C "$HOME_DIR" status --porcelain >"$d/uncommitted-before.txt" 2>/dev/null || true
+  fi
+  rc=0; "$LAUNCHER" update --ref "v$v" --yes >"$log" 2>&1 || rc=$?
+  [[ $rc == 0 ]] || issues+=("install step exited $rc|$(tail -25 "$log")")
+  [[ "$(cat "$HOME_DIR/.beings/.protocol-version" 2>/dev/null)" == "$v" ]] || issues+=("version file still says $(cat "$HOME_DIR/.beings/.protocol-version" 2>/dev/null || echo none) after the update|")
+  "$LAUNCHER" doctor >"$d/doctor.log" 2>&1 || true
+  grep -q '^  FAIL' "$d/doctor.log" && issues+=("doctor reports failures|$(grep '^  FAIL' "$d/doctor.log")")
+  if [[ -x "$HOME_DIR/ops/teams-kit/verify.sh" ]]; then
+    (cd "$HOME_DIR/ops/teams-kit" && ./verify.sh --no-send) >"$d/verify.log" 2>&1 || issues+=("Teams kit verify failed|$(grep -E 'FAIL' "$d/verify.log" | head -20)")
+  fi
+  lc="$(find "$HOME_DIR" -path '*/.kit-upgrade/CHANGES.txt' -not -path '*/node_modules/*' -exec grep -H 'LOCAL CHANGES' {} + 2>/dev/null | sed "s#$HOME_DIR/##" || true)"
+  # Report: what ran, what failed, and the evidence (sanitised before it can leave the box).
+  {
+    echo "# Update to v$v: $([[ ${#issues[@]} == 0 ]] && echo 'no problems' || echo "${#issues[@]} problem(s)")"
+    echo; echo "- From: v$before (kit $(cat "$HOME_DIR/.beings/.kit-version" 2>/dev/null || echo ?))"
+    echo "- Host: $(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-unknown}"), bash ${BASH_VERSION%%(*}, node $(node -v 2>/dev/null || echo none), python $(python3 -V 2>&1 | cut -d' ' -f2)"
+    echo "- Components: $(cat "$HOME_DIR/.beings/.kit-components" 2>/dev/null || echo unknown)"
+    local i=1 it
+    for it in "${issues[@]}"; do
+      echo; echo "## Problem $i: ${it%%|*}"; i=$((i + 1))
+      if [[ -n "${it#*|}" ]]; then echo; echo '```'; printf '%s\n' "${it#*|}"; echo '```'; fi
+    done
+    if [[ -n "$lc" ]]; then echo; echo "## Files with local changes (kept; upstream copies staged for a hand merge)"; echo; echo '```'; echo "$lc"; echo '```'; fi
+  } | sanitise >"$d/report.md"
+  local pr="" status=ok
+  if [[ ${#issues[@]} -gt 0 ]]; then
+    status=problems
+    if [[ $REPORT == pr ]]; then pr="$(open_pr "$v" "$d/report.md" 2>>"$d/pr.err" | tail -1)" || pr=""; fi
+  fi
+  {
+    if [[ $status == ok ]]; then
+      printf '<p>✅ <b>Updated to v%s</b> (from v%s). Checks passed.</p>' "$(esc "$v")" "$(esc "$before")"
+    else
+      printf '<p>⚠️ <b>Update to v%s finished with %s problem(s)</b>:</p><ul>' "$(esc "$v")" "${#issues[@]}"
+      for it in "${issues[@]}"; do printf '<li>%s</li>' "$(esc "${it%%|*}")"; done
+      printf '</ul><p>Rollback point: tag pre-update-v%s in my home repo.</p>' "$(esc "$v")"
+      if [[ -n "$pr" ]]; then printf '<p>Reported on the protocol repo: %s</p>' "$(esc "$pr")"
+      elif [[ $REPORT == pr ]]; then printf '<p>Could not open the pull request (%s); the report is on my box.</p>' "$(esc "$(tail -1 "$d/pr.err" 2>/dev/null || echo unknown)")"; fi
+    fi
+    if [[ -n "$lc" ]]; then printf '<p>Files you changed were kept; %s need a hand merge with the new version.</p>' "$(grep -c . <<<"$lc")"; fi
+  } | say_owner || echo "could not message the owner; report in $d" >&2
+  python3 -c 'import json,sys,datetime; json.dump({"version":sys.argv[2],"status":sys.argv[3],"pr":sys.argv[4],"dir":sys.argv[5],"at":datetime.datetime.now().astimezone().isoformat()},open(sys.argv[1],"w"))' \
+    "$STATE/last.json" "$v" "$status" "$pr" "$d"
+  rm -f "$OFFER"
+  echo "update v$v: $status${pr:+ ($pr)}; report $d/report.md"
+  [[ $status == ok ]]
+}
+
+case "${1:-}" in
+  check) cmd_check ;;
+  apply) shift; cmd_apply "$@" ;;
+  skip) v="${2:?skip needs a version}"; v="${v#v}"
+        [[ "$(jget "$OFFER" version)" == "$v" ]] && { rm -f "$OFFER"; echo "$v" >>"$STATE/skipped.txt"; echo "skipped v$v"; } || echo "v$v was not offered" ;;
+  status) cat "$OFFER" 2>/dev/null && echo; cat "$STATE/last.json" 2>/dev/null && echo; true ;;
+  *) sed -n '2,3p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac

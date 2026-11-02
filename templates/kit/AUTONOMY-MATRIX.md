@@ -16,6 +16,7 @@
 | Send as the owner | draft → owner types `send Dn` | never | never | `approve.mjs` only, re-checked in Graph |
 | Send many mails as the owner | one preview → owner types `SEND Bn` once | never | never | `send-batch.mjs` only, re-checked in Graph, ledger, rate gap |
 | Change the Being's own rules, workflow or kit setup | when the owner asks (recommend first) | never | never | AUTONOMY.md "Owner Authority" |
+| Update the kit to a new release; open a pull request with the problems an update found | only after the owner types `UPDATE vX.Y.Z` | never | never | `being-update` (offered version only), report sanitised + `publish-check` |
 | Merge / approve / close PRs, deploy, push shared branches | propose → owner approves | **ask owner** | only if the task says so | AUTONOMY.md |
 | Cancel CI runs | no | no | no | CI guard wrapper |
 | Commitments on dates, money, scope | never | never | never | prompt rules + review |
