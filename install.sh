@@ -48,12 +48,14 @@
 #               Flags on the command line win over the file.
 #   --track-private  Commit .beings-local/ in git (default: never committed).
 #   --check     Report which protocol and kit pieces exist here. Changes nothing.
+#   --ref <r>   Install from a release tag or branch (e.g. v0.5.0) instead of main; ignored when BEINGS_BASE_URL is set.
+#               `<being> update` wraps this: shows what changed, then runs --update with the components installed before.
 #   With --update --with, --name is the Being's name (not taken from the directory).
 # ============================================================
 
 set -euo pipefail
 
-PROTOCOL_VERSION="0.4.0"
+PROTOCOL_VERSION="0.5.0"
 UPDATE_MODE=false
 GLOBAL_MODE=false
 BEING_NAME=""
@@ -1024,7 +1026,7 @@ EOF
 # Operations Kit (opt-in: --with operations,teams-kit)
 # Additive only: missing files are added, existing ones are never overwritten.
 # ============================================================
-KIT_VERSION="0.2.0"
+KIT_VERSION="0.3.0"
 KIT_TEMPLATES=(GUARDRAILS.md AUTONOMY-MATRIX.md JOB-CHECKLIST.md facts/_TEMPLATE.md)
 # Listed explicitly so a curl install can fetch them; tests/install-kit.test.sh keeps these in sync with git.
 TEAMS_KIT_FILES=(
@@ -1195,25 +1197,42 @@ kit_launcher() {
   fi
 }
 
+kit_sha() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
+# kit_manifest_set <manifest> <name> <file>: record the installed hash of <name>.
+kit_manifest_set() {
+  local t; t="$(mktemp)"
+  awk -F'\t' -v f="$2" '$2 != f' "$1" > "$t"; printf '%s\t%s\n' "$(kit_sha "$3")" "$2" >> "$t"; mv "$t" "$1"
+}
+
 # Teams kit: copy missing files; changed upstream files go to .kit-upgrade/ for review.
 kit_teams() {
   local dst="ops/teams-kit"
-  local f tmp changed=0
+  local f tmp changed=0 local_changed=0 man="$dst/.kit-manifest" was
   mkdir -p "$dst/state"
+  # .kit-manifest: the hash each file had when the kit installed it, so a local (owner-approved) edit is told apart
+  # from an old kit version and never swapped out blindly.
+  touch "$man"; rm -f "$dst/.kit-upgrade/CHANGES.txt"
   for f in "${TEAMS_KIT_FILES[@]}" "${TEAMS_KIT_EXEC[@]}"; do
     tmp="$(mktemp)"
     fetch_or_copy_file "skills/teams-kit/$f" "$tmp"
     if [ ! -e "$dst/$f" ]; then
       mkdir -p "$(dirname "$dst/$f")"
       mv "$tmp" "$dst/$f"
-      KIT_ADDED=$((KIT_ADDED + 1))
+      KIT_ADDED=$((KIT_ADDED + 1)); kit_manifest_set "$man" "$f" "$dst/$f"
     elif cmp -s "$tmp" "$dst/$f"; then
       rm -f "$tmp"
-      KIT_KEPT=$((KIT_KEPT + 1))
+      KIT_KEPT=$((KIT_KEPT + 1)); kit_manifest_set "$man" "$f" "$dst/$f"
     else
       mkdir -p "$(dirname "$dst/.kit-upgrade/$f")"
       mv "$tmp" "$dst/.kit-upgrade/$f"
       changed=$((changed + 1))
+      was="$(awk -F'\t' -v f="$f" '$2 == f { print $1 }' "$man")"
+      if [ -n "$was" ] && [ "$was" = "$(kit_sha "$dst/$f")" ]; then
+        printf '%s\tupstream only: safe to swap in\n' "$f" >> "$dst/.kit-upgrade/CHANGES.txt"
+      else
+        local_changed=$((local_changed + 1))
+        printf '%s\tLOCAL CHANGES: merge by hand, keep the owner-approved edits\n' "$f" >> "$dst/.kit-upgrade/CHANGES.txt"
+      fi
     fi
   done
   for f in "${TEAMS_KIT_EXEC[@]}"; do
@@ -1221,7 +1240,8 @@ kit_teams() {
     [ -f "$dst/.kit-upgrade/$f" ] && chmod +x "$dst/.kit-upgrade/$f"
   done
   print_step "Teams kit in ${BOLD}${dst}/${NC}"
-  [ "$changed" -gt 0 ] && print_warn "${changed} kit file(s) changed upstream — new versions in ${BOLD}${dst}/.kit-upgrade/${NC} (yours untouched)"
+  [ "$changed" -gt 0 ] && print_warn "${changed} kit file(s) changed upstream — new versions in ${BOLD}${dst}/.kit-upgrade/${NC} (yours untouched; see CHANGES.txt)"
+  [ "$local_changed" -gt 0 ] && print_warn "${local_changed} of them carry local changes (or predate the manifest): merge by hand, do not copy over"
 
   if [ ! -f "$dst/.env" ]; then
     # Single-quoted values: the file is sourced by bash, so spaces and quotes must survive.
@@ -1520,6 +1540,9 @@ install_kit() {
     fi
   fi
   echo "$KIT_VERSION" > .beings/.kit-version
+  # Components installed so far, so `<being> update` re-applies the same set.
+  { [ -f .beings/.kit-components ] && tr ',' '\n' < .beings/.kit-components; tr ',' '\n' <<< "$WITH_COMPONENTS"; } \
+    | grep -v '^$' | sort -u | paste -sd, - > .beings/.kit-components.tmp && mv .beings/.kit-components.tmp .beings/.kit-components
   print_step "Operations Kit v${KIT_VERSION}: added ${KIT_ADDED}, kept ${KIT_KEPT} existing"
   [ -n "$BEING_ACCESS" ] && print_info "Access list (being.toml): ${BEING_ACCESS//,/, } — review with ${BOLD}bin/${BEING_NAME} access${NC}"
   print_info "Next: fill {{…}} placeholders in .beings/GUARDRAILS.md and AUTONOMY-MATRIX.md, review, commit"
@@ -1875,7 +1898,13 @@ main() {
   local next_is_with=false
   local next_is_owner=false
   local next_is_config=false
+  local next_is_ref=false
   for arg in "$@"; do
+    if $next_is_ref; then
+      [ -n "${BEINGS_BASE_URL:-}" ] || BASE_URL="https://raw.githubusercontent.com/VeltriaAI/beings-protocol/$arg"
+      next_is_ref=false
+      continue
+    fi
     if $next_is_config; then
       CONFIG_FILE="$arg"
       next_is_config=false
@@ -1912,6 +1941,8 @@ main() {
       --config=*)       CONFIG_FILE="${arg#--config=}" ;;
       --track-private)  TRACK_PRIVATE=true ;;
       --check)          CHECK_MODE=true ;;
+      --ref)            next_is_ref=true ;;
+      --ref=*)          [ -n "${BEINGS_BASE_URL:-}" ] || BASE_URL="https://raw.githubusercontent.com/VeltriaAI/beings-protocol/${arg#--ref=}" ;;
     esac
   done
   load_config

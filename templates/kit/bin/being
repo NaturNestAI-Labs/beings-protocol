@@ -23,6 +23,50 @@ fi
 CALLER_PWD="$PWD"
 cd "$WORKSPACE"
 
+# update: compare installed versions with a GitHub ref, print the newer changelog entries, then run install.sh --update.
+cmd_update() {
+  local ref="main" check=false yes=false base tmp lp lk rp rk comps
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --check) check=true ;; --yes|-y) yes=true ;; --ref) ref="${2:?--ref needs a tag or branch}"; shift ;;
+      *) echo "usage: $NAME update [--check] [--ref vX.Y.Z|branch] [--yes]" >&2; return 2 ;;
+    esac; shift
+  done
+  [[ $ref =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "bad ref: $ref" >&2; return 2; }
+  base="${BEINGS_BASE_URL:-https://raw.githubusercontent.com/VeltriaAI/beings-protocol/$ref}"
+  tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
+  curl -fsSL "$base/install.sh" -o "$tmp/install.sh" || { echo "cannot fetch $base/install.sh" >&2; return 1; }
+  curl -fsSL "$base/CHANGELOG.md" -o "$tmp/CHANGELOG.md" 2>/dev/null || : > "$tmp/CHANGELOG.md"
+  rp="$(sed -n 's/^PROTOCOL_VERSION="\(.*\)"/\1/p' "$tmp/install.sh" | head -1)"
+  rk="$(sed -n 's/^KIT_VERSION="\(.*\)"/\1/p' "$tmp/install.sh" | head -1)"
+  lp="$(cat "$WORKSPACE/.beings/.protocol-version" 2>/dev/null || echo 0.0.0)"
+  lk="$(cat "$WORKSPACE/.beings/.kit-version" 2>/dev/null || echo 0.0.0)"
+  echo "installed: protocol $lp, kit $lk"
+  echo "$ref: protocol ${rp:-?}, kit ${rk:-?}   (install.sh sha256 $(sha256sum "$tmp/install.sh" | cut -c1-16))"
+  python3 - "$tmp/CHANGELOG.md" "$lp" <<'PY'
+import re, sys
+v = lambda s: tuple(int(x) for x in re.findall(r"\d+", s)[:3])
+have, show, out = v(sys.argv[2]), False, []
+for l in open(sys.argv[1], encoding="utf-8"):
+    m = re.match(r"^## \[(\d+\.\d+\.\d+)\]", l)
+    if m: show = v(m.group(1)) > have
+    if show: out.append(l.rstrip())
+print("\n".join(out) if out else "(no newer changelog entries)")
+PY
+  if [[ "$rp" == "$lp" && "$rk" == "$lk" ]]; then echo "up to date"; return 0; fi
+  $check && return 10
+  if ! $yes; then
+    [[ -t 0 ]] || { echo "not a terminal: re-run with --yes to apply" >&2; return 2; }
+    read -r -p "Update to protocol $rp, kit $rk? [y/N] " a; [[ $a == [yY]* ]] || return 1
+  fi
+  comps="$(cat "$WORKSPACE/.beings/.kit-components" 2>/dev/null || true)"
+  (cd "$WORKSPACE" && BEINGS_BASE_URL="$base" bash "$tmp/install.sh" --update --name "$NAME" ${comps:+--with "$comps"} --yes)
+  find "$WORKSPACE" -path '*/.kit-upgrade/CHANGES.txt' -not -path '*/node_modules/*' 2>/dev/null | while read -r f; do
+    grep -q 'LOCAL CHANGES' "$f" && { echo "merge by hand (local changes kept): $f"; grep 'LOCAL CHANGES' "$f" | sed 's/^/  /'; }
+  done
+  return 0
+}
+
 usage() {
   cat <<EOF
 $NAME                        client picker
@@ -36,6 +80,8 @@ $NAME login being|owner [--teams|--outlook|--web] [--scopes a,b]   sign in one s
 $NAME stacks [list|status|down|audit|disarm|add|remove]            all app stacks; nothing starts at boot
 $NAME stack new <app> [--home DIR] [--project P] [--compose F] [--url U] [--env F] [--shim] [--force]
 $NAME doctor                 health checks: guardrails, memory index size, backups, secrets folder, logins, stacks
+$NAME update [--check] [--ref vX.Y.Z|branch] [--yes]   pull the latest kit from GitHub: shows the changelog first;
+                             files you changed are never replaced (see .kit-upgrade/CHANGES.txt)
 "today" opens the daily session the Teams kit feeds (work session for Claude, triage session for Codex).
 BEING_SKIP_PERMISSIONS=1 skips the clients' permission prompts and sandbox (off by default).
 EOF
@@ -491,6 +537,7 @@ case "${1:-}" in
   stacks) shift; cmd_stacks "$@" ;;
   stack) shift; cmd_stack "$@" ;;
   doctor) shift; cmd_doctor "$@" ;;
+  update) shift; cmd_update "$@" ;;
   help|-h|--help) usage ;;
   "")
     if [[ -t 0 && -t 1 ]]; then

@@ -146,6 +146,10 @@ curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/inst
 
 # Non-interactive — auto-accepts basic-memory install (skips Axon)
 curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update --yes
+
+# With the Operations Kit launcher: see what changed (CHANGELOG.md), then apply; --ref vX.Y.Z pins a release
+bin/<name> update --check
+bin/<name> update
 ```
 
 The updater:

@@ -468,6 +468,9 @@ Current version: **0.2.1**
 
 ### Changelog
 
+**v0.5.0 — 2026-11-03** (Operations Kit v0.3.0): see `CHANGELOG.md` at the repository root (from this release on, the
+changelog lives there).
+
 **v0.4.0 — 2026-10-23** (Operations Kit v0.2.0)
 - **Operations Kit** (optional): `GUARDRAILS.md`, `AUTONOMY-MATRIX.md`, `JOB-CHECKLIST.md` and one-fact memory templates; multi-client launcher; model-routing guide; "corrections become rules" and "fix the mechanism" patterns.
 - **Teams kit skill** (`skills/teams-kit/`): Graph-polling watcher, triage → work → voice handler with per-lane sessions (owner, each teammate chat, delegate, jobs), signed send grants, fail-closed teammate fence, optional OS isolation (`off | bwrap | users`), group routing, background jobs with verification, blocker, watchdog, owner-approved drafts, read-only owner views, mail and presence.

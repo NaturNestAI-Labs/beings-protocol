@@ -11,6 +11,7 @@ so they can be ported one at a time, each with its tests. Nothing below is speci
 | Owner authority | The owner decides the Being's own rules, workflow and kit setup; the Being recommends first (1-3 lines), then does it without asking anyone else. Hard limits unchanged | `templates/beings/AUTONOMY.md`, `templates/kit/AUTONOMY-MATRIX.md`, owner-lane prompt in `being-handle` |
 | Plain blockers | Card reads Stuck / Why / I need from you; optional 4th argument = exact error, logged to `blockers.jsonl` only | `being-blocker` (runner and Teams kit) |
 | Heavy-task lock | `heavy-lock <name> -- <cmd>`: one heavy task box-wide, waits for free memory and low swap, exit 75 on timeout | `skills/runner/heavy-lock` |
+| Field fixes and updates | Owner id required, persona fallback, per-chat attachments, install manifest, SSH/suspend/xrdp hardening, tunnel dry run, cron box time, `<being> update` + versioning | see `CHANGELOG.md` 0.5.0 |
 | Message and work conventions | One language for all messages, short plain status, verify "sent/armed" live, >2 min work becomes a job, stacks in own scope | `templates/beings/CONVENTIONS.md` |
 
 ## Next (described, not yet ported)
@@ -22,6 +23,9 @@ so they can be ported one at a time, each with its tests. Nothing below is speci
   `<being> claude <keyword>` follows a running job, `fork` opens a side copy, a finished job resumes.
 - A job writes a RESULT file and ends its own turn; a hook marks it done and wakes the daily session to verify the result
   before anything is reported. Lost links re-attach by themselves; only an explicit detach ends the client.
+- A turn that ends while the job's own shells still run work in the background (a render, a long generation) is busy,
+  not waiting: the hook checks the session's live child processes and sends no "waiting"/"stuck" ping until they finish.
+  A missing RESULT then still alerts once.
 - Tests: job start/attach/detach, keyword uniqueness, reserved words, result hook.
 
 ### 2. One boss session and lead sessions
@@ -65,8 +69,9 @@ so they can be ported one at a time, each with its tests. Nothing below is speci
 
 ### 8. Being boxes owned by a person
 - When a Being runs on a teammate's box, that teammate is its owner and holds the password; they sign in themselves.
-- The owner's authority (above) covers the Being's setup there. Installer reinstalls must not overwrite owner-approved
-  local kit changes silently: record local changes and re-apply or warn on `install.sh` upgrade.
+- The owner's authority (above) covers the Being's setup there. Upgrades never overwrite owner-approved local kit
+  changes: shipped in 0.5.0 as the install manifest (`.kit-upgrade/CHANGES.txt` flags LOCAL CHANGES). Next: re-apply a
+  recorded local patch on top of the new version automatically when it still applies cleanly.
 
 ### 9. Model usage reminders
 - A cron check reads the Being's weekly model usage and tells the owner once at each threshold (e.g. 80/85/90%),

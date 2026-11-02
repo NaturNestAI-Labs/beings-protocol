@@ -72,7 +72,7 @@ inst "$h" --update --name nova --with bogus && bad "unknown component accepted" 
 
 # 7. --check reports and writes nothing.
 before=$(tree "$TMP/case2"); inst "$TMP/case2" --check
-grep -q "kit 0.2.0" "$TMP/out" && [[ "$(tree "$TMP/case2")" == "$before" ]] && ok "--check is read-only" || bad "--check"
+grep -q "kit $(sed -n 's/^KIT_VERSION="\(.*\)"/\1/p' "$REPO/install.sh")" "$TMP/out" && [[ "$(tree "$TMP/case2")" == "$before" ]] && ok "--check is read-only" || bad "--check"
 
 # 8. Operations: tools, templates, secrets folder, shared skills, auto-memory link, global guardrails.
 h="$TMP/case1"; G="$TMP/home"

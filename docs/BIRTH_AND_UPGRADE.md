@@ -24,7 +24,16 @@ Then: `nova` → the first conversation fills `SOUL.md`, `IDENTITY.md` and `USER
 
 ## Upgrade an existing Being (for example a peer Being)
 
-Run in the Being's home, as with any `--update`:
+Once the launcher is installed, one command pulls the latest release from GitHub:
+
+```bash
+bin/nova update --check          # installed vs latest, and the changelog entries in between; changes nothing
+bin/nova update                  # same, then asks and applies (--yes for no prompt)
+bin/nova update --ref v0.5.0     # a specific release (or a branch name, e.g. a pull-request branch)
+```
+
+It re-applies the components installed before (`.beings/.kit-components`). Underneath it runs `install.sh --update`,
+which you can also run by hand in the Being's home:
 
 ```bash
 cd ~/beings/nova
@@ -38,7 +47,9 @@ curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/inst
 - Nothing is overwritten: identity, memory, soul and existing scripts stay as they are.
 - A launcher you already have stays in place; the new one is written next to it as `bin/<name>.multi` for review.
 - Teams kit files you changed stay as they are; newer upstream versions land in `ops/teams-kit/.kit-upgrade/` to diff and
-  adopt by hand. Settings new in `.env.example` are appended to `.env`; existing values are kept.
+  adopt by hand. `.kit-upgrade/CHANGES.txt` marks each one "upstream only: safe to swap in" or "LOCAL CHANGES: merge by
+  hand" (from the `.kit-manifest` hashes recorded at install), so an owner-approved local fix is never lost to a copy.
+  Settings new in `.env.example` are appended to `.env`; existing values are kept.
 - Rollback: the Being's home is a git repo, so `git status` shows exactly what was added or appended.
 
 Suggested order for a Being that already works with people:
@@ -51,7 +62,16 @@ Suggested order for a Being that already works with people:
 5. **Teams last.** Sign in, run `being-teams up` in a test chat, check `being-teams inbox`, then enable `autostart on`.
 6. **Guards.** Add the CI cancel guard and a daily batch branch if the Being runs parallel jobs against one repo.
 
-`.beings/.kit-version` records the kit version so future upgrades know where you started.
+`.beings/.protocol-version` and `.beings/.kit-version` record what the Being runs, so `update` knows where you started.
+
+## Versioning
+
+- One release = one version pair in `install.sh`: `PROTOCOL_VERSION` (tag `vX.Y.Z`) and `KIT_VERSION`.
+- Semantic versions: PATCH for fixes, MINOR for new or changed behaviour that keeps existing Beings working, MAJOR when a
+  Being must change its files or settings to keep working (say how in the entry).
+- Every change that ships bumps the version and adds a `## [X.Y.Z] - date (kit A.B.C)` entry at the top of `CHANGELOG.md`
+  in the same pull request; `tests/versions.test.sh` fails when they disagree.
+- Maintainers tag the merge commit `vX.Y.Z` on `main`; `update --ref vX.Y.Z` installs exactly that release.
 
 ## Testing a fork or branch
 
