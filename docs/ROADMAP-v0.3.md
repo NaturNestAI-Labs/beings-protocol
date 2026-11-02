@@ -68,6 +68,19 @@ so they can be ported one at a time, each with its tests. Nothing below is speci
 - The owner's authority (above) covers the Being's setup there. Installer reinstalls must not overwrite owner-approved
   local kit changes silently: record local changes and re-apply or warn on `install.sh` upgrade.
 
+### 9. Model usage reminders
+- A cron check reads the Being's weekly model usage and tells the owner once at each threshold (e.g. 80/85/90%),
+  so long jobs can move to a smaller model or wait for the reset before a session limit kills them mid-run.
+
+### 10. Watched-host health alerts
+- A small cron watcher per remote host the Being looks after: root filesystem read-only, expected data stopped arriving
+  for longer than its normal quiet period, host not checkable. One alert per incident; it clears only after a healthy run.
+- Host details live in a config file outside the repo; the watcher is read-only and never clears locks.
+
+### 11. Inline chat images
+- Save the inline images of a chat message (screenshots the owner pastes) so a lane can read them, next to
+  `teams-fetch-attachment.mjs`.
+
 ## Open questions for maintainers
 - Batch size cap (100) and default gap (20 s): fine as defaults, or per-tenant settings in `being.toml`?
 - Should natural-language approval (4) be opt-in per owner (`approval_words = "strict" | "natural"`)?

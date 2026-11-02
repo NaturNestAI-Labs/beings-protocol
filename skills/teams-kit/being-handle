@@ -738,7 +738,8 @@ open(f,"w").writelines(keep)
 PY
       log "owner decision: $verb $id"
       if [[ $verb == batch-* ]]; then
-        node "$KIT/send-batch.mjs" "${verb#batch-}" $([[ $id == - ]] || echo "$id") --chat "$cid" --msg "$mid" </dev/null 2>>"$HLOG" || true
+        bargs=("${verb#batch-}"); [[ $id == - ]] || bargs+=("$id")
+        node "$KIT/send-batch.mjs" "${bargs[@]}" --chat "$cid" --msg "$mid" </dev/null 2>>"$HLOG" || true
       else node "$KIT/approve.mjs" "$verb" "$id" --chat "$cid" --msg "$mid" </dev/null 2>>"$HLOG" || true; fi
     done
     # 2) Delegate lane: logged; drafted only when BEING_DELEGATE_DRAFTS=1. Never acknowledged.
