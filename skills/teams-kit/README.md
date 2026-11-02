@@ -30,6 +30,7 @@ for the day without one person's run ever resuming another's. Teammate runs are 
 | `fifo-wait.mjs` | trigger FIFO for the pre-connected fast-path standbys |
 | `being-job` | `agent / codex / run` background jobs; `list / status / log / stop` |
 | `being-blocker` | tell the owner at once that something is blocked |
+| `send-batch.mjs` | many mails as the owner after one previewed `SEND Bn` (see Mail batches) |
 | `being-watchdog`, `being-status` | stall alerts; live "what is running" view (also fed to triage) |
 | `triage-jobs.py` | compact running + recently finished job list for the triage snapshot |
 | `being-sessions`, `being-steer`, `being-board`, `mesh.py` | session mesh: named live sessions, steering (live or a durable note), today's board |
@@ -227,7 +228,7 @@ being-steer <name> "<message>"      running → live through Claude Code session
     straight to the lane's work run (no ack). A live note the run never read goes the durable way when it ends. Jobs: live only,
     else recorded in the job file for its result handler. Teammate lanes: own lane only. exit 0 ok | 2 unknown | 3 refused | 4 unreachable
 being-board add promise|done|handoff "<one line>" [--lane <name>] | list [N]   today's board (state/board.jsonl), lane-scoped
-being-blocker "<task>" "<what failed, with the exact error>" "<what you need from the owner>"
+being-blocker "<task>" "<why it is stuck, plain words>" "<what you need from the owner>" ["<exact error, logged only>"]
 being-teams doctor     file modes; FAIL (exit 1) on a same-user host, louder if an owner token is readable, or if the
                        model user can reach .env, caches, grants or the handler key. WARN instead with
                        BEING_SINGLE_USER_ACK=1 and no owner sign-in
@@ -243,6 +244,22 @@ being-handle warm | triage | work | work-lane <lane> | voice
             lane), each with a fresh grant revoked at the end; teammate runs are fenced
     voice:  queued messages → fast model rewords, per lane → sent (after every work run)
 ```
+
+## Mail batches
+
+Many mails as the owner with one approval (GUARDRAILS.md "Sending as the owner"):
+
+```bash
+send-batch.mjs plan --drafts D45-D79 [--label "follow-up"]                     # from staged mail drafts
+send-batch.mjs plan --recipients list.csv --subject "Quote {{company}}" [--attach /abs/file] < template.md
+send-batch.mjs plan ... --dry-run    # print the preview and simulate the send; nothing stored, posted or sent
+send-batch.mjs status [Bn]           # open / sending / done / partial / skipped, with counts
+send-batch.mjs stop Bn               # halts before the next mail
+```
+
+The owner types `SEND Bn` (or `SEND` with one open batch) or `skip Bn`; the handler runs it with no model. Results:
+`state/batches/Bn.results.jsonl` (one line per recipient) and a summary in the owner's 1:1. `SEND Bn` again retries only
+the failed rows. CSV needs an `email` column; `{{column}}` placeholders must all have values.
 
 ## Script notes
 

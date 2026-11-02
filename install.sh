@@ -1029,6 +1029,7 @@ KIT_TEMPLATES=(GUARDRAILS.md AUTONOMY-MATRIX.md JOB-CHECKLIST.md facts/_TEMPLATE
 # Listed explicitly so a curl install can fetch them; tests/install-kit.test.sh keeps these in sync with git.
 TEAMS_KIT_FILES=(
   .env.example .gitignore GUARDRAILS.md README.md SKILL.md ack-schema.json approval.mjs approval.test.mjs
+  batch-lib.mjs batch-lib.test.mjs
   being-deadman.test.mjs being-job.test.mjs being-retry.test.mjs being-watchdog.test.mjs cache-write.mjs
   cache-write.test.mjs comms-log.mjs comms-log.test.mjs detect-util.mjs detect-util.test.mjs docs-index.mjs
   docs-index.test.mjs drive-util.mjs fast-warm.test.mjs fifo-wait.mjs fmt.mjs fmt.test.mjs graph.mjs isolation.test.mjs
@@ -1047,7 +1048,7 @@ TEAMS_KIT_EXEC=(
   being-sessions being-status being-steer being-teams being-watchdog docs-index-cli.mjs draft-for-owner.mjs
   fast-warm.mjs hive-mcp-stdio isolation/live-check.sh isolation/make-shims isolation/migrate.sh isolation/model-run
   isolation/rollback.sh isolation/setup-users.sh isolation/test-sandbox.sh isolation/verify.sh kit-broker link-guard.mjs
-  mail.mjs mesh.py model-relay.mjs offboard.sh onedrive.mjs owner-mail owner-read set-photo.mjs share-file.mjs
+  mail.mjs mesh.py model-relay.mjs offboard.sh onedrive.mjs owner-mail owner-read send-batch.mjs set-photo.mjs share-file.mjs
   team-fence.py team-sync teams-ack.mjs teams-channel.mjs teams-delete-msg.mjs teams-detect.mjs
   teams-fetch-attachment.mjs teams-login-device.mjs teams-presence.mjs teams-read.mjs teams-seen.mjs teams-send-dm.mjs
   triage-jobs.py verify.sh webhook/graph-subscribe.mjs webhook/graph-webhook.mjs webhook/hook-wait

@@ -7,7 +7,7 @@ SRC="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 . "$SRC/../../scripts/kit-lib.sh"
 kit_args "$@" || exit 2
 DST="$HOME_DIR/ops/runner"; UNITS="$(kit_unit_dir)"; BINDIR="$HOME/.local/bin"
-kit_copy "$SRC" "$DST" being-job being-blocker being-heartbeat env.example README.md
+kit_copy "$SRC" "$DST" being-job being-blocker being-heartbeat heavy-lock env.example README.md
 ENVF="$HOME/.config/being-runner/env"
 if [[ ! -e "$ENVF" ]]; then
   mkdir -p "$(dirname "$ENVF")"; chmod 700 "$(dirname "$ENVF")"
@@ -19,7 +19,7 @@ for u in being-session.service being-poller.service being-heartbeat.service bein
 done
 # Commands on PATH, unless another runner (e.g. the Teams kit's) already owns the name.
 mkdir -p "$BINDIR"
-for f in being-job being-blocker; do
+for f in being-job being-blocker heavy-lock; do
   if [[ ! -e "$BINDIR/$f" ]]; then ln -s "$DST/$f" "$BINDIR/$f"
   elif [[ "$(readlink -f "$BINDIR/$f")" != "$(readlink -f "$DST/$f")" ]]; then kit_say "kept $BINDIR/$f (points elsewhere)"; fi
 done

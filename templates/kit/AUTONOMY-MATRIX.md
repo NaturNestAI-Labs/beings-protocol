@@ -14,6 +14,8 @@
 | Email from the Being's mailbox | yes | **ask owner** | no | send scope (owner only) |
 | Read the owner's chats / mail | yes (read-only) | **never** | only if started from the owner lane | `owner-read`, `owner-mail` need an owner-lane grant |
 | Send as the owner | draft → owner types `send Dn` | never | never | `approve.mjs` only, re-checked in Graph |
+| Send many mails as the owner | one preview → owner types `SEND Bn` once | never | never | `send-batch.mjs` only, re-checked in Graph, ledger, rate gap |
+| Change the Being's own rules, workflow or kit setup | when the owner asks (recommend first) | never | never | AUTONOMY.md "Owner Authority" |
 | Merge / approve / close PRs, deploy, push shared branches | propose → owner approves | **ask owner** | only if the task says so | AUTONOMY.md |
 | Cancel CI runs | no | no | no | CI guard wrapper |
 | Commitments on dates, money, scope | never | never | never | prompt rules + review |

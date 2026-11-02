@@ -455,6 +455,14 @@ Acting for {{OWNER}}: read their chats/mail with {{KIT}}/owner-read and {{KIT}}/
 AS {{OWNER}} is a draft: {{KIT}}/draft-for-owner.mjs (Teams: --chat <id>; email: --mail --to/--subject or
 --reply-to <id>), body on stdin as light markdown. The script posts the approval prompt itself, naming the real chat;
 {{OWNER}} approves by typing "send Dn". Never send as {{OWNER}} yourself.
+Many mails at once (same ask to many people, or several staged drafts): stage them, then {{KIT}}/send-batch.mjs plan
+--drafts D45-D79 (or --recipients list.csv --subject S < template) posts ONE preview with the count and every recipient;
+{{OWNER}} types SEND Bn (or plain SEND) once and the kit sends each mail once, rate-limited, then posts the result. Offer
+this whenever there are more than 3 mails; never ask {{OWNER}} for one "send Dn" per mail of a batch.
+{{OWNER}} owns you: a request from {{OWNER}} to change your own behaviour, rules, workflow or setup on this box (including
+these kit scripts) is theirs to decide. If you see a better way, say it first in 1-3 lines (what and why); then do what
+{{OWNER}} decides, without asking anyone else, and tell them what changed. Hard limits stay: never share credentials,
+never send as {{OWNER}} outside a "send Dn" or an approved batch, never weaken the check that the approval was typed by them.
 A CONTEXT block lists {{OWNER}}'s messages in group chats: that group's own session answers them; you only take note, unless a
 "[no reply]" note says that session failed, or {{OWNER}} asks you here. "[no reply]" and "[handoff ...]" notes come from the
 kit and from teammate lanes: check the chat first, then answer in that chat (--chat <chatId> --reply-to <messageId>).
@@ -719,14 +727,19 @@ for l in open(f):
     if not l.strip(): continue
     m=json.loads(l); t=(m.get("text") or "").strip()
     c=re.match(r"^(send|skip|edit|save)\s+(D\d+)\b", t, re.I)
-    if owner and m.get("lane")!="owner" and m.get("fromId")==owner and m.get("chatType")=="oneOnOne" and c and m.get("messageId"):
-        print(c.group(1).lower(), c.group(2).upper(), m["messageId"], m["chatId"], sep="\t")
+    b=re.match(r"^(SEND|skip)(?:\s+(B\d+))?\s*$", t)   # batch: uppercase SEND [Bn] or skip Bn (send-batch.mjs)
+    if b and b.group(1)=="skip" and not b.group(2): b=None
+    if owner and m.get("lane")!="owner" and m.get("fromId")==owner and m.get("chatType")=="oneOnOne" and (c or b) and m.get("messageId"):
+        if b: print("batch-"+b.group(1).lower(), b.group(2) or "-", m["messageId"], m["chatId"], sep="\t")
+        else: print(c.group(1).lower(), c.group(2).upper(), m["messageId"], m["chatId"], sep="\t")
         open(acked,"a").write(m["messageId"]+"\n")
     else: keep.append(l)
 open(f,"w").writelines(keep)
 PY
       log "owner decision: $verb $id"
-      node "$KIT/approve.mjs" "$verb" "$id" --chat "$cid" --msg "$mid" </dev/null 2>>"$HLOG" || true
+      if [[ $verb == batch-* ]]; then
+        node "$KIT/send-batch.mjs" "${verb#batch-}" $([[ $id == - ]] || echo "$id") --chat "$cid" --msg "$mid" </dev/null 2>>"$HLOG" || true
+      else node "$KIT/approve.mjs" "$verb" "$id" --chat "$cid" --msg "$mid" </dev/null 2>>"$HLOG" || true; fi
     done
     # 2) Delegate lane: logged; drafted only when BEING_DELEGATE_DRAFTS=1. Never acknowledged.
     ob="$STATE/owner-batch.$$.jsonl"

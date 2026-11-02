@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# heavy-lock <name> -- <cmd...>  run a heavy task (video render, 4K encode, big build, browser fleet) one at a time box-wide.
+# Waits for the lock, then for MemAvailable >= HEAVY_MIN_GB (10) and swap use < HEAVY_MAX_SWAP_PCT (80);
+# fails with exit 75 after HEAVY_TIMEOUT_MIN (60). Nested calls (HEAVY_LOCK_HELD set) run straight through.
+set -uo pipefail
+name=${1:?usage: heavy-lock <name> -- <cmd...>}; shift
+[[ "${1:-}" == -- ]] && shift
+(( $# )) || { echo "heavy-lock: nothing to run" >&2; exit 2; }
+[[ -n "${HEAVY_LOCK_HELD:-}" ]] && exec "$@"
+
+LOCK=${HEAVY_LOCK_FILE:-${BEING_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/being}/heavy.lock}; HOLDER="$LOCK.holder"
+min_kb=$(( ${HEAVY_MIN_GB:-10} * 1024 * 1024 )); max_swap=${HEAVY_MAX_SWAP_PCT:-80}
+poll=${HEAVY_POLL_S:-15}; deadline=$(( SECONDS + ${HEAVY_TIMEOUT_MIN:-60} * 60 ))
+mkdir -p "$(dirname "$LOCK")"
+
+mem() {   # sets avail_kb and swap_pct from /proc/meminfo (pure bash, no extra processes)
+  local k v _ st=0 sf=0; avail_kb=0
+  while read -r k v _; do
+    case $k in MemAvailable:) avail_kb=$v ;; SwapTotal:) st=$v ;; SwapFree:) sf=$v ;; esac
+  done </proc/meminfo
+  swap_pct=$(( st > 0 ? (st - sf) * 100 / st : 0 ))
+}
+give_up() { echo "heavy-lock[$name]: gave up after ${HEAVY_TIMEOUT_MIN:-60} min: $1" >&2; exit 75; }
+
+exec 9>>"$LOCK"
+said=
+until flock -n 9; do
+  [[ -n $said ]] || { echo "heavy-lock[$name]: waiting for $(cat "$HOLDER" 2>/dev/null || echo another heavy task)" >&2; said=1; }
+  (( SECONDS < deadline )) || give_up "lock still held by $(cat "$HOLDER" 2>/dev/null || echo unknown)"
+  sleep "$poll"
+done
+said=
+while mem; (( avail_kb < min_kb || swap_pct >= max_swap )); do
+  [[ -n $said ]] || { echo "heavy-lock[$name]: waiting for memory (avail $((avail_kb/1048576)) GB, swap ${swap_pct}%)" >&2; said=1; }
+  (( SECONDS < deadline )) || give_up "memory avail $((avail_kb/1048576)) GB < ${HEAVY_MIN_GB:-10} GB or swap ${swap_pct}% >= ${max_swap}%"
+  sleep "$poll"
+done
+printf '%s (pid %s, since %(%F %T)T)\n' "$name" "$$" -1 >"$HOLDER"
+# The command runs with fd 9 closed, so only this wrapper holds the lock and it frees when the wrapper exits.
+HEAVY_LOCK_HELD=$name "$@" 9>&-
+rc=$?
+: >"$HOLDER"
+exit $rc
