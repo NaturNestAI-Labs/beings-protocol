@@ -6,6 +6,8 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 TMP=$(mktemp -d); PIDS=()
+# Inside tmux, bare tmux targets $TMUX and ignores TMUX_TMPDIR; drop it so tests never touch a live server.
+unset TMUX TMUX_PANE
 cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done; TMUX_TMPDIR="$TMP" tmux kill-server 2>/dev/null || true; rm -rf "$TMP"; }
 trap cleanup EXIT
 fails=0; ok() { echo "  ok  $1"; }; bad() { echo "  FAIL $1"; fails=$((fails + 1)); }
