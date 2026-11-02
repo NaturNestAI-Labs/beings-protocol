@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """team-fence.py: PreToolUse hook for teammate-lane runs; refuses tool calls that touch the owner's private paths.
    team-fence.py --settings   print the claude --settings JSON (this hook + auto memory off) used by being-handle/being-job"""
-import json, os, re, shlex, signal, sys
+import hashlib, json, os, re, shlex, signal, sys
 
 KIT = os.path.dirname(os.path.realpath(__file__))
 H = r"(?:~|\$\{?HOME\}?|/home/[^/\s'\"]+|/Users/[^/\s'\"]+|/root)"
@@ -37,7 +37,7 @@ DENY = [
     (H + r"/\.codex/(?:sessions|archived_sessions|session_index|auth|history)", "other sessions"),
     # Sourcing the kit .env to send is fine; reading or copying any .env is not.
     (r"\b(?:cat|head|tail|less|more|grep|rg|sed|awk|strings|base64|xxd|od|cp|mv|scp|curl|python3?|node|env)\b[^|;&\n]*" + ENV_FILE, "credentials"),
-    (r"teams-kit/state/(?!jobs/)", "kit state"),
+    (r"teams-kit/state/(?!jobs/|attachments/team-[0-9a-f]{10}/)", "kit state"),
     (r"\b(?:comms\.jsonl|owner-inbox|owner-watermark|token-cache[\w-]*|handler\.key|grants/|handler\.log|codex\.log|inbox\.jsonl|send-as/)", "kit state"),
     (r"\b(?:owner-read|owner-mail|draft-for-owner|approve\.mjs|scope\.mjs)\b", "owner tools"),
     (r"\bowner-(?:web|browser|access|channel[\w-]*|forward[\w-]*)\b", "owner tools"),
@@ -73,6 +73,15 @@ def settings():
     return json.dumps({"autoMemoryEnabled": False, "hooks": {"PreToolUse": [{"matcher": "*", "hooks": [hook]}]}})
 
 WS = os.path.realpath(os.environ.get("BEING_WORKSPACE") or os.path.dirname(os.path.dirname(KIT)))   # = being-handle WORKSPACE
+
+_ST = [re.escape(os.path.realpath(os.environ["BEING_STATE_DIR"]).rstrip("/"))] if os.environ.get("BEING_STATE_DIR") else []
+ATTACH = re.compile(r"(?:" + "|".join(_ST + [r"\bstate"]) + r")/attachments(?:/([\w-]*))?(?=/|[\s\"'\\*]|$)")
+
+
+def lane_attachments():
+    lane = os.environ.get("BEING_LANE", "")
+    return "team-" + hashlib.sha1(lane[5:].encode()).hexdigest()[:10] if lane.startswith("team:") else None
+
 
 HIVE_CMD = re.compile(r"(?:^|[;&|(`\s])(?:hive-mcp|hive-mcp-http|hive-status)(?=\s|$)")
 # Message bodies are text, not file access: a heredoc fed to the sender or the board is not scanned for paths (the sender's
@@ -179,6 +188,9 @@ def check(ev):
     bash = ti.get("command") if ev.get("tool_name") == "Bash" and isinstance(ti.get("command"), str) else ""
     bash = re.sub(r"/{2,}", "/", re.sub(r"/(?:\./)+", "/", bash))
     if not share and (personal_note(blob) or (bash and personal_note(bash, stops=False))): return "a note about the owner personally"   # share: team overrides this rule only
+    own = lane_attachments()
+    for d in ATTACH.findall(blob):   # attachments: this lane's own folder only (teams-fetch-attachment.mjs names it)
+        if d != own: return "another conversation's attachments"
     for jid in JOB.findall(blob):
         if lane_of(jid) != os.environ.get("BEING_LANE", ""): return f"job {jid} belongs to another conversation"
     return None

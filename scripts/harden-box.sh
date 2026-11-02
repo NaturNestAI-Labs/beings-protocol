@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# sudo harden-box.sh --config <being.toml> [--user <u>] [--rotate-password] [--desktop] [--dry-run]: one-time box
+# sudo harden-box.sh --config <being.toml> [--user <u>] [--rotate-password] [--desktop [--rdp gnome|xrdp]] [--dry-run]: one-time box
 # hardening: SSH key-only, firewall (office subnet only), linger, per-box password, RDP server (docs/PROVISIONING.md).
 set -euo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-CFG="" USER_NAME="" ROTATE=0 DESKTOP=0 DRY=0
+CFG="" USER_NAME="" ROTATE=0 DESKTOP=0 DRY=0 RDP_KIND=auto
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CFG="${2:?}"; shift 2 ;;
     --user) USER_NAME="${2:?}"; shift 2 ;;
     --rotate-password) ROTATE=1; shift ;;
     --desktop) DESKTOP=1; shift ;;
+    --rdp) RDP_KIND="${2:?}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     *) sed -n '2,3p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
   esac
@@ -47,7 +48,10 @@ for u in "$USER_NAME" ${SUDO_USER:+"$SUDO_USER"}; do
   [[ -s "$h/.ssh/authorized_keys" ]] || { echo "  $u has no ~/.ssh/authorized_keys: add a key first, or you lose SSH access" >&2; (( DRY )) || exit 1; }
 done
 grep -qiE '^\s*Include\s+/etc/ssh/sshd_config.d/' /etc/ssh/sshd_config 2>/dev/null || echo "  WARN /etc/ssh/sshd_config does not include sshd_config.d/; add the lines below to it by hand"
-put /etc/ssh/sshd_config.d/60-being-harden.conf 644 <<'EOF'
+# sshd keeps the FIRST value it reads and reads sshd_config.d/ in name order: a cloud-init 50-*.conf with
+# "PasswordAuthentication yes" beats any later file, so ours sorts first.
+[[ -f /etc/ssh/sshd_config.d/60-being-harden.conf ]] && run rm -f /etc/ssh/sshd_config.d/60-being-harden.conf
+put /etc/ssh/sshd_config.d/01-being-harden.conf 644 <<'EOF'
 # Written by harden-box.sh (Beings kit). Remove this file and reload ssh to undo.
 PasswordAuthentication no
 KbdInteractiveAuthentication no
@@ -56,6 +60,11 @@ PubkeyAuthentication yes
 EOF
 run sshd -t
 run systemctl reload ssh || run systemctl reload sshd
+if (( ! DRY )) && sshd -T 2>/dev/null | grep -qx 'passwordauthentication yes'; then
+  echo "  FAIL password SSH is still on; it is set here first:" >&2
+  grep -lis '^\s*PasswordAuthentication\s\+yes' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | sed 's/^/    /' >&2
+  exit 1
+fi
 
 step 3 "firewall: SSH$RDPTXT from $SUBNET only"
 if command -v ufw >/dev/null; then
@@ -69,19 +78,45 @@ else
 fi
 echo "  The tunnel needs no inbound port: cloudflared connects out."
 
-step 4 "linger (the Being's services run without a login and start after a reboot)"
+step 4 "linger (the Being's services run without a login and start after a reboot); never suspend"
 run loginctl enable-linger "$USER_NAME"
+# A desktop login screen suspends an idle box after ~20 min; a Being's box must stay up.
+run systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
 
 if (( DESKTOP )); then
-  step 5 "remote desktop (GNOME Remote Desktop, system mode: RDP, then the Ubuntu login screen)"
-  if command -v grdctl >/dev/null; then
-    run grdctl --system rdp enable
-    [[ "$RDP_PORT" == 3389 ]] || run grdctl --system rdp set-port "$RDP_PORT"
-    echo "  RDP credentials for $USER_NAME: you are asked for the password (store it on the owner's laptop in rdp.env)."
-    run grdctl --system rdp set-credentials "$USER_NAME"
-    run systemctl enable --now gnome-remote-desktop.service
+  if [[ $RDP_KIND == auto ]]; then   # GNOME's system-mode RDP fails at the login-screen handover on 24.04; xrdp works there
+    ver="$(. /etc/os-release 2>/dev/null; echo "${VERSION_ID:-0}")"
+    RDP_KIND=$(python3 -c 'import sys; print("xrdp" if float(sys.argv[1] or 0) < 25 else "gnome")' "$ver" 2>/dev/null || echo gnome)
+  fi
+  if [[ $RDP_KIND == xrdp ]]; then
+    step 5 "remote desktop (xrdp, the user's own desktop session)"
+    run apt-get install -y xrdp
+    run adduser xrdp ssl-cert
+    [[ "$RDP_PORT" == 3389 ]] || run sed -i "s/^port=3389$/port=$RDP_PORT/" /etc/xrdp/xrdp.ini
+    # Without this rule every xrdp login pops a colour-profile password prompt.
+    put /etc/polkit-1/rules.d/45-being-colord.rules 644 <<'RULE'
+polkit.addRule(function(action, subject) {
+  if (action.id.indexOf("org.freedesktop.color-manager.") == 0 && subject.isInGroup("users")) return polkit.Result.YES;
+});
+RULE
+    if [[ ! -f "$UHOME/.xsessionrc" ]]; then   # the Ubuntu session, not a bare GNOME one
+      printf '%s\n' 'export GNOME_SHELL_SESSION_MODE=ubuntu' 'export XDG_CURRENT_DESKTOP=ubuntu:GNOME' \
+        'export XDG_CONFIG_DIRS=/etc/xdg/xdg-ubuntu:/etc/xdg' | put "$UHOME/.xsessionrc" 644
+      run chown "$USER_NAME:" "$UHOME/.xsessionrc"
+    fi
+    run systemctl enable --now xrdp
+    echo "  RDP signs in with $USER_NAME's own Linux password (the owner keeps it)."
   else
-    echo "  WARN grdctl not found: install gnome-remote-desktop (Ubuntu desktop) and re-run with --desktop"
+    step 5 "remote desktop (GNOME Remote Desktop, system mode: RDP, then the Ubuntu login screen)"
+    if command -v grdctl >/dev/null; then
+      run grdctl --system rdp enable
+      [[ "$RDP_PORT" == 3389 ]] || run grdctl --system rdp set-port "$RDP_PORT"
+      echo "  RDP credentials for $USER_NAME: you are asked for the password (store it on the owner's laptop in rdp.env)."
+      run grdctl --system rdp set-credentials "$USER_NAME"
+      run systemctl enable --now gnome-remote-desktop.service
+    else
+      echo "  WARN grdctl not found: install gnome-remote-desktop (Ubuntu desktop) and re-run with --desktop, or use --rdp xrdp"
+    fi
   fi
 fi
 

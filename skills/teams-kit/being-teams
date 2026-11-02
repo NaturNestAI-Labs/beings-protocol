@@ -247,8 +247,12 @@ WantedBy=default.target
 UNIT
 }
 
+# An empty owner id makes the owner a teammate lane (no owner lane, no approvals): never start that way.
+need_owner() { [[ -n "${OWNER_OID:-}" ]] || { echo "OWNER_OID is empty in .env: fill it before starting (README: Set up)" >&2; exit 78; }; }
+
 case "${1:-status}" in
   up)
+    need_owner
     if via_systemd; then
       # A loop outside the unit (hand-started) would run twice: stop it first.
       if alive && [[ "$(cat "$PIDF")" != "$(systemctl --user show -p MainPID --value "$UNIT")" ]]; then loop_cleanup; fi
@@ -270,6 +274,7 @@ case "${1:-status}" in
     fi
     "$0" down; "$0" up ;;
   __run)   # the unit's foreground process (Type=simple): its pid is the unit's MainPID
+    need_owner
     unset BEING_TEAMS_SYSTEMD   # children (handlers, jobs, sessions) must not inherit it
     exec >>"$LOG" 2>&1 </dev/null
     loop_cleanup   # whatever a previous run left behind (a crash skips ExecStop)

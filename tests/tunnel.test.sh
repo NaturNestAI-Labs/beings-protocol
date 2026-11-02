@@ -41,6 +41,9 @@ chmod +x "$TMP/bin/"* "$TMP/boxbin/"*
 run() { (cd "$TMP/work" && HOME="$ADMIN" PATH="$TMP/bin:$PATH" python3 "$REPO/skills/tunnel/being-tunnel" "$@") >"$TMP/out" 2>&1; }
 state() { curl -s "$CF_API_BASE/__state"; }
 
+# 0. a dry run writes no record (its fake ids would block the real create)
+run create nova --dry-run; [[ ! -e "$TMP/work/tunnel-nova.json" ]] && ok "dry run writes no record" || bad "dry run wrote a record"
+
 # 1. create
 run create nova && ok "create succeeded" || bad "create: $(tail -5 "$TMP/out")"
 calls="$TMP/calls"

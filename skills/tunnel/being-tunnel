@@ -154,12 +154,14 @@ class CF:
 # ---------- record (ids only, never secrets) ----------
 
 class Record:
-    def __init__(self, path, being):
-        self.path = path
+    def __init__(self, path, being, dry=False):
+        self.path, self.dry = path, dry   # a dry run never writes: its fake ids would block the real create
         self.d = json.load(open(path)) if os.path.exists(path) else {"being": being, "tunnel": None, "apps": {},
                                                                       "dns": {}, "routes": [], "service_tokens": {}, "log": []}
 
     def save(self, event=None):
+        if self.dry:
+            return
         if event:
             self.d["log"].append({"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "event": event})
         self.d["rollback"] = [
@@ -529,7 +531,7 @@ def main():
         die("Being name must be lowercase letters, digits or dashes", 2)
     s = load_settings(a)
     cf = CF(load_api_env(s["org_env"]), dry=a.dry_run)
-    rec = Record(a.record or f"tunnel-{a.being}.json", a.being)
+    rec = Record(a.record or f"tunnel-{a.being}.json", a.being, dry=a.dry_run)
     {"create": cmd_create, "status": cmd_status, "delete": cmd_delete, "rotate": cmd_rotate,
      "service-token": cmd_service_token, "hook": cmd_hook}[a.command](cf, s, rec, a)
 

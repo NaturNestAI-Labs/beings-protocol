@@ -3,11 +3,14 @@
 // Usage and exit codes: README.md "Script reference". The token is only ever sent to Microsoft Graph.
 import { writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { connect, need, fail } from './graph.mjs';
 
 const args = process.argv.slice(2);
 const url = args.find((a) => !a.startsWith('--') && args[args.indexOf(a) - 1] !== '--out');
-const out = args.includes('--out') ? args[args.indexOf('--out') + 1] : path.join(need('BEING_STATE_DIR'), 'attachments');
+// One folder per chat lane, so a teammate lane can open only its own chat's files (team-fence checks the same name).
+const laneDir = (lane = '') => (lane.startsWith('team:') ? `team-${createHash('sha1').update(lane.slice(5)).digest('hex').slice(0, 10)}` : 'owner');
+const out = args.includes('--out') ? args[args.indexOf('--out') + 1] : path.join(need('BEING_STATE_DIR'), 'attachments', laneDir(process.env.BEING_LANE));
 const MAX = 25 * 1024 * 1024;
 if (!url) fail('usage: teams-fetch-attachment.mjs <attachment url> [--out <dir>]', 2);
 

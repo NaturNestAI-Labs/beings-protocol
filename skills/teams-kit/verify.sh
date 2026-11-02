@@ -25,10 +25,14 @@ if [[ -f "$KIT/.env" ]] && bash -c 'set -euo pipefail; set -a; . "$1"' _ "$KIT/.
   set +a
   ok ".env sources cleanly"
 else bad ".env missing or does not source"; echo "verify: stopped"; exit 1; fi
-for k in BEING_NAME BEING_UPN BEING_STATE_DIR BEING_CACHE OWNER_UPN M365_CLIENT_ID M365_TENANT_ID; do
+for k in BEING_NAME BEING_UPN BEING_STATE_DIR BEING_CACHE OWNER_UPN OWNER_OID OWNER_DM_CHAT M365_CLIENT_ID M365_TENANT_ID; do
   [[ -n "${!k:-}" ]] || bad "$k is empty in .env"
 done
 [[ "$(stat -c %a "$KIT/.env")" == 600 ]] && ok ".env is 0600" || bad ".env mode $(stat -c %a "$KIT/.env") (chmod 600)"
+
+if sw="$(cd "$KIT" && python3 -c 'import soul; soul.public_soul(soul.read(soul.SOUL))' 2>&1 >/dev/null)" && [[ $sw == *"no public section"* ]]; then
+  warn "SOUL.md has no section teammate lanes may see (BEING_SOUL_PUBLIC_SECTIONS): they get a minimal persona"
+fi
 
 echo "[sessions: who am I]"
 OWNER_ON=0; [[ "${BEING_OWNER_DELEGATE:-0}" == 1 && -n "${OWNER_CACHE:-}" ]] && OWNER_ON=1

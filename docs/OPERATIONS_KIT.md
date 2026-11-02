@@ -164,7 +164,7 @@ that waits for the home on a slow drive), and the secrets drop-in.
 writes a JSON result file, the script diffs it against what was already reported and sends a digest only when something
 is new (state advances only after a successful send). `jobs/research-job/` runs several workers in parallel from
 `workers.conf`, then one merge run; once per day, resumable. Schedule with a systemd timer (`OnCalendar=... <Area/City>`)
-or cron (`CRON_TZ`, see `cron.example`).
+or cron in box time (Debian/Ubuntu cron ignores `CRON_TZ`; see `cron.example`).
 Settings: `BEING_TZ`, `JOB_MODEL`, `JOB_TIMEOUT` (2h), `JOB_ALLOWED_TOOLS`, `JOB_PARALLEL` (research workers at once, 4),
 `JOB_SEND_CMD` (gets the digest on stdin; default: the Teams kit DM to the owner) and `BEING_SKIP_PERMISSIONS`.
 

@@ -59,13 +59,27 @@ def private_hits(text):
     return [m for m in PRIVATE_MARKERS if re.search(m, text, re.I)]
 
 
+def norm_head(h):
+    """'## 2. Identity 🌱' and '## identity' both match 'Identity': numbering, symbols and case are ignored."""
+    return re.sub(r"[^a-z0-9?]+", " ", re.sub(r"^\s*\d+[.)]\s*", "", h).lower()).strip()
+
+
+PUBLIC_NORM = {norm_head(s) for s in PUBLIC_SECTIONS}
+
+
 def public_soul(md):
-    keep = []
+    keep, matched = [], 0
     for head, lines in sections(md):
         if head is None:
             keep += [l for l in lines if l.startswith("# ")]   # the title only
-        elif head in PUBLIC_SECTIONS:
+        elif norm_head(head) in PUBLIC_NORM:
+            matched += 1
             keep += [l for l in lines if not any(re.search(d, l) for d in DROP_LINES)]
+    if not matched:   # an empty persona makes the lane answer as "someone's assistant": say who it is, and warn
+        name = os.environ.get("BEING_NAME") or "this Being"
+        print(f"soul.py: no public section of SOUL.md matched BEING_SOUL_PUBLIC_SECTIONS; teammate lanes get a minimal persona",
+              file=sys.stderr)
+        keep.append(f"You are {name}, a Being with your own name and voice, not anyone's assistant.")
     text = "\n".join(keep).strip() + "\n"
     if private_hits(text):   # fail closed: a marker inside a kept section takes its line out
         text = "\n".join(l for l in text.splitlines() if not private_hits(l)) + "\n"

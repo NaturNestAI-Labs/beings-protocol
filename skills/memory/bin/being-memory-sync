@@ -17,6 +17,7 @@ kit_name() {   # the Being's name from the Teams kit .env, without sourcing the 
   [ -f "$f" ] && sed -n "s/^BEING_NAME=['\"]\{0,1\}\([a-z0-9-]*\)['\"]\{0,1\}.*/\1/p" "$f" | head -1
 }
 NAME="${BEING_NAME:-$(kit_name)}"; NAME="${NAME:-$(basename "$HOME_DIR")}"
+BOX_TZ="${TZ-}"; BOX_TZ_SET="${TZ+1}"   # cron runs on the box clock, not the Being's zone
 [ -n "${BEING_TZ:-}" ] && export TZ="$BEING_TZ"
 REMOTE="${BEING_SYNC_REMOTE:-origin}"
 AUTO_MEM="${BEING_AUTO_MEMORY_DIR:-$HOME/.claude/projects/$(enc "$HOME_DIR")/memory}"
@@ -118,12 +119,17 @@ install_timer() {
   local at="${BEING_SYNC_AT:-22:00}" tz=""
   [[ "$at" =~ ^[0-2][0-9]:[0-5][0-9]$ ]] || { echo "BEING_SYNC_AT must be HH:MM" >&2; return 2; }
   if [ "${1:-}" = --cron ]; then
-    local line="${at#*:} ${at%:*} * * * $SELF run # $UNIT"
+    # Debian/Ubuntu cron ignores CRON_TZ (and it would also shift every later line): convert to the box's own time.
+    if [ -n "${BEING_TZ:-}" ]; then
+      at="$(if [ -n "$BOX_TZ_SET" ]; then export TZ="$BOX_TZ"; else unset TZ; fi; python3 -c 'import sys,datetime as d,zoneinfo as z
+h,m=map(int,sys.argv[1].split(":")); t=d.datetime.now(z.ZoneInfo(sys.argv[2])).replace(hour=h,minute=m)
+print(t.astimezone().strftime("%H:%M"))' "$at" "$BEING_TZ")" || { echo "unknown BEING_TZ $BEING_TZ" >&2; return 2; }
+    fi
+    local line="$((10#${at#*:})) $((10#${at%:*})) * * * $SELF run # $UNIT"
     local boot="@reboot sleep 300; $SELF boot # $UNIT"
     { crontab -l 2>/dev/null | grep -v "# $UNIT\$" | grep -v "^CRON_TZ=.* # $UNIT\$"
-      [ -n "${BEING_TZ:-}" ] && echo "CRON_TZ=$BEING_TZ # $UNIT"
       echo "$line"; echo "$boot"; } | crontab -
-    echo "cron entries for $UNIT installed ($at${BEING_TZ:+ $BEING_TZ})"
+    echo "cron entries for $UNIT installed ($at box time${BEING_TZ:+, ${BEING_SYNC_AT:-22:00} $BEING_TZ})"
     return 0
   fi
   [ -n "${BEING_TZ:-}" ] && tz=" $BEING_TZ"

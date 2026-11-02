@@ -30,7 +30,9 @@ Each step names who does it. Settings come from the Being's [`being.toml`](CONFI
       - asks for a **new password for this box only** (never reuse one across boxes; never send it in chat)
       - SSH key-only and no root login (refuses to start if the Being or the admin has no `authorized_keys` yet)
       - firewall: SSH (and RDP with `--desktop`) from `[box].office_subnet` only, everything else inbound denied
-      - linger, and with `--desktop` GNOME Remote Desktop in system mode (RDP, then the Ubuntu login screen)
+      - linger, sleep and suspend masked (a desktop login screen would suspend an idle box), and with `--desktop` an RDP server:
+        GNOME Remote Desktop in system mode on 25.04 and later, xrdp on 24.04 (where the GNOME login handover fails); `--rdp` overrides
+      - SSH key-only in `01-being-harden.conf`, which sorts before cloud-init's file; the run fails if password SSH is still on
       - `--dry-run` prints every command first. Test a new key login before closing your session.
 
 ## 2. Microsoft 365 account (tenant admin + owner)
@@ -138,6 +140,6 @@ that is not active. `--dry-run` shows the plan. Sign-ins are **not** restored by
 4. Free the Claude and Codex seats (`claude /logout`, `codex logout` on the box first).
 5. Owner's laptop: remove `~/.local/bin/<being>-desktop`, `~/.config/<being>-box/`, the `<being>-box` SSH block.
 6. Box admin: remove the Being's keys from `authorized_keys`, `sudo loginctl disable-linger <being>`, then lock or
-   delete the user. Undo hardening: remove `/etc/ssh/sshd_config.d/60-being-harden.conf` and the `being ssh/rdp`
+   delete the user. Undo hardening: remove `/etc/ssh/sshd_config.d/01-being-harden.conf` and the `being ssh/rdp`
    firewall rules.
 7. Keep the Being's home repo: its memory and the tunnel record are the history of what it did.

@@ -10,6 +10,8 @@ set -a
 . "$KIT/.env"
 set +a
 STATE="${BEING_STATE_DIR:?}"; HLOG="$STATE/handler.log"
+# Without the owner's id every message, the owner's too, would be handled as a teammate's.
+[[ -n "${OWNER_OID:-}" ]] || { echo "being-handle: OWNER_OID is empty in .env; refusing to run (README: Set up)" | tee -a "$HLOG" >&2; exit 78; }
 # OS isolation (isolation/README.md): model runs of a sandboxed lane start through being-launch. BEING_ISOLATION_LANES=team
 # sandboxes teammate lanes only; the owner lane then runs exactly as with BEING_ISOLATION=off.
 ISO="${BEING_ISOLATION:-off}"
@@ -415,6 +417,8 @@ whereabouts, chats or mood, politely say that isn't yours to share and offer to 
 needsWork false); never guess about anything else.
 Never promise dates, prices or commitments; never reveal internal details to anyone but {{OWNER}}. Do not run tools or send
 anything yourself. Never open or quote .env files, token caches or credentials (replies that do are dropped).
+OWNER ASKS: never answer {{OWNER}} with a bare refusal ("I can't"). If it touches your own setup, logins or rules, it is
+{{OWNER}}'s call: needsWork true, and the work step says what it needs or recommends first.
 needsWork: true when real work or a fuller answer must follow; false only when your response settles it.
 summary: 2-4 sentences on what is asked, plus context you know, for the colleague who will do the work.
 RULES

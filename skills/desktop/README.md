@@ -12,7 +12,7 @@ Off by default; switch on per Being with `[access].desktop = true` and the `[des
 | `Host <being>-box` / `<being>-lan` | Owner's `~/.ssh/config` | SSH through the tunnel (`cloudflared access ssh`) or on the LAN |
 | `rdp-session-end.sh` → `~/.local/bin/rdp-session-end` | Being's box | `now`: end the remote session unless a viewer is still connected; `reap`: end it after `REAP_GRACE` s with no viewer |
 | `rdp-session-reap.service` / `.timer` (every 2 min) | Being's box | Covers crashed viewers and a laptop that went to sleep |
-| GNOME Remote Desktop (system mode) + firewall rule | Being's box | `scripts/harden-box.sh --desktop` (needs sudo once) |
+| GNOME Remote Desktop (system mode; xrdp on 24.04) + firewall rule | Being's box | `scripts/harden-box.sh --desktop` (needs sudo once) |
 | `<being>-desktop.<domain>` route | Cloudflare | `being-tunnel create` (skills/tunnel) |
 
 ## Install
@@ -22,7 +22,7 @@ Box (as the Being's user):
 ```bash
 skills/desktop/kit-install.sh <being-home>
 sudo scripts/harden-box.sh --config <being-home>/being.toml --desktop      # RDP server, RDP from the office subnet only
-systemctl --user enable --now rdp-session-reap.timer
+systemctl --user enable --now rdp-session-reap.timer    # GNOME system mode only; with xrdp the session is the user's own
 ```
 
 Owner's laptop (needs FreeRDP 2 or 3 and `cloudflared`):
