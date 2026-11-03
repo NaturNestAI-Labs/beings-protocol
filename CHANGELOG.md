@@ -20,7 +20,7 @@ Field fixes from Beings running on teammates' boxes, and patterns proven on a Be
   on GitHub becomes one message to the owner listing its bug fixes and new features. The owner replies
   `UPDATE vX.Y.Z` (or `skip vX.Y.Z`) in the 1:1, routed without a model. The Being then updates itself (rollback tag
   `pre-update-vX.Y.Z`), keeps locally changed files, runs `doctor` and `verify.sh`, and reports. When something fails
-  it opens a pull request on the protocol repo with a sanitised problem report (`BEING_UPDATE_REPORT=pr`; needs `gh`
+  it can open a pull request on the protocol repo with a sanitised problem report (opt-in `BEING_UPDATE_REPORT=pr`; needs `gh`
   signed in, and `publish-check` must pass), and tells the owner the link.
 - **Install manifest** (`.kit-manifest`): staged upgrades are labelled in `.kit-upgrade/CHANGES.txt` as "upstream only"
   or "LOCAL CHANGES", so owner-approved local edits are never swapped out blindly.
@@ -47,6 +47,7 @@ Field fixes from Beings running on teammates' boxes, and patterns proven on a Be
 - **`being-tunnel --dry-run`** wrote a record with fake ids that blocked the real create; a dry run writes nothing.
 - Onboarding test unsets `TMUX`, so its tmux calls never reach a live server.
 - Batch `SEND` arguments quoted in `being-handle`.
+- `being-update` no longer opens a public pull request by default: `BEING_UPDATE_REPORT` defaults to `off`; set `pr` to opt in.
 
 ## [0.4.0] - 2026-10-23 (kit 0.2.0)
 

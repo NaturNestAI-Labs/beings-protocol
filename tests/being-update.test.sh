@@ -29,6 +29,7 @@ run check >/dev/null
 m="$(sent)"
 grep -q "New Beings kit version v$pv" <<<"$m" && grep -q 'Bug fixes (' <<<"$m" && grep -q 'New features (' <<<"$m" \
   && grep -q "UPDATE v$pv" <<<"$m" && ok "owner asked once with fixes and features" || bad "offer: $m"
+! grep -q 'pull request' <<<"$m" && ok "no pull request promised by default" || bad "default offer mentions a PR: $m"
 : >"$T/sent.html"; run check >/dev/null; [[ ! -s "$T/sent.html" ]] && ok "same version not offered twice" || bad "offered twice"
 
 # 2. Only the offered version can be applied.
@@ -42,7 +43,7 @@ rc=0; run apply "$pv" >/dev/null 2>&1 || rc=$?; [[ $rc == 3 ]] && ok "offer used
 
 # 4. A failing update: owner told the problem, report kept, nothing sensitive in it.
 echo 0.4.0 >"$W/.beings/.protocol-version"; echo 0.2.0 >"$W/.beings/.kit-version"; fake_install fail
-run check >/dev/null; : >"$T/sent.html"; rc=0; run apply "$pv" >/dev/null 2>&1 || rc=$?
+run check >/dev/null; : >"$T/sent.html"; rc=0; BEING_UPDATE_REPORT="pr" run apply "$pv" >/dev/null 2>&1 || rc=$?
 rep="$(ls "$H"/.local/state/beings-update/nova/v"$pv"-*/report.md | tail -1)"
 [[ $rc != 0 ]] && grep -q 'problem(s)' "$T/sent.html" && grep -q 'Could not open the pull request' "$T/sent.html" \
   && ok "failure reported to the owner (PR not possible without gh)" || bad "apply fail: rc $rc $(sent)"

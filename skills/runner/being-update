@@ -12,7 +12,7 @@ HOME_DIR="${BEING_WORKSPACE:?set BEING_WORKSPACE in $ENVF}"
 STATE="${BEING_UPDATE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/beings-update/$(basename "$HOME_DIR")}"
 REF="${BEING_UPDATE_REF:-main}"                         # where new releases are announced
 REPO="${BEING_UPDATE_REPO:-VeltriaAI/beings-protocol}"  # where problem reports go as pull requests
-REPORT="${BEING_UPDATE_REPORT:-pr}"                     # pr | off
+REPORT="${BEING_UPDATE_REPORT:-off}"                    # off | pr (opt-in)
 mkdir -p "$STATE"; chmod 700 "$STATE"; umask 077
 LAUNCHER="$(ls "$HOME_DIR"/bin/* 2>/dev/null | while read -r f; do grep -q '^cmd_update()' "$f" 2>/dev/null && { echo "$f"; break; }; done)"
 [[ -n "$LAUNCHER" ]] || { echo "no launcher with 'update' in $HOME_DIR/bin (install.sh --update --with operations)" >&2; exit 2; }
