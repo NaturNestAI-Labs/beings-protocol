@@ -53,6 +53,11 @@ grep -qxF "ops/teams-kit/.env" "$h/.gitignore" && ok ".env gitignored" || bad ".
 # 4. Re-run is idempotent; the name comes from the kit .env, not the directory.
 before=$(tree "$h")
 inst "$h" --update --with teams-kit && [[ "$(tree "$h")" == "$before" ]] && ok "re-run changes nothing (name read from .env)" || bad "re-run changed files: $(tail -3 "$TMP/out")"
+# The check above only bites without claude on PATH; this one does not depend on the host.
+DT="$(sed -n '/^detect_tools() {/,/^}/p' "$INSTALL")"; BASH_BIN="$(command -v bash)"; mkdir -p "$TMP/dtbin"; ln -s "$(command -v ls)" "$TMP/dtbin/ls"
+dt() { (cd "$1" && PATH="$TMP/dtbin" "$BASH_BIN" -c "$DT"'; detect_tools'); }
+mkdir -p "$TMP/dt1/.claude" "$TMP/dt2/.claude/skills"; ln -s ../.agents/skills "$TMP/dt1/.claude/skills"
+[[ "$(dt "$TMP/dt1")" != *claude-code* && "$(dt "$TMP/dt2")" == *claude-code* ]] && ok "the kit's .claude/skills link alone is not Claude Code" || bad "detect_tools: [$(dt "$TMP/dt1")] [$(dt "$TMP/dt2")]"
 
 # 5. Upgrade never overwrites: edited files stay, upstream versions go to .kit-upgrade/, new .env keys are merged.
 echo "# my rule" >>"$h/.beings/GUARDRAILS.md"; echo "// local patch" >>"$h/ops/teams-kit/fmt.mjs"

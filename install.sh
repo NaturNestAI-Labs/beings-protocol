@@ -152,7 +152,8 @@ detect_tools() {
 
   # Check existing config files
   { [ -f ".cursorrules" ] || [ -d ".cursor" ]; } && tools+=("cursor")
-  { [ -f "CLAUDE.md" ] || [ -d ".claude" ]; } && tools+=("claude-code")
+  # The kit's own .claude/skills link alone is not Claude Code (else a re-run adds CLAUDE.md).
+  { [ -f "CLAUDE.md" ] || { [ -d ".claude" ] && ! { [ -L .claude/skills ] && [ "$(ls -A .claude)" = skills ]; }; }; } && tools+=("claude-code")
   [ -d ".codex" ] && tools+=("codex")
 
   # Check installed binaries (if not already detected via config)
