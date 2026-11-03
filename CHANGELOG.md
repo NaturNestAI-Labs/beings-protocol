@@ -38,6 +38,8 @@ Field fixes from Beings running on teammates' boxes, and patterns proven on a Be
   `cron.example` no longer relies on `CRON_TZ`.
 
 ### Fixed
+- Component upgrades from 0.4.0 tolerate a missing `.kit-manifest`, preserving local files and staging upstream copies.
+- `being-update` shows install guidance when the launcher directory is missing, empty, or has no update launcher.
 - **Owner treated as a teammate:** with `OWNER_OID` empty the owner's own messages ran in a teammate lane. The handler
   and `being-teams up` now refuse to start; `verify.sh` fails on empty `OWNER_OID` or `OWNER_DM_CHAT`.
 - **Attachments shared across chats:** each chat lane saves to its own folder; the teammate fence allows only that one.

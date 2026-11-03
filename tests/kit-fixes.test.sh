@@ -48,6 +48,17 @@ c="$T/up/.kit-upgrade/CHANGES.txt"
 grep -qP '^a\tLOCAL CHANGES' "$c" && grep -qP '^b\tupstream only' "$c" && [[ $(wc -l <"$c") == 2 ]] && [[ $(cat "$T/local") -ge 1 ]] \
   && grep -q 'owner fix' "$T/up/a" && ok "manifest: local edits flagged, kept, one line per file" || bad "manifest: $(cat "$c" 2>/dev/null)"
 
+# A pre-manifest upgrade must stage the first changed file without aborting the component.
+legacy="$T/legacy"; mkdir -p "$legacy/ops/tunnel" "$T/legacy-home"
+printf 'local edit\n' >"$legacy/ops/tunnel/being-tunnel"
+rc=0
+HOME="$T/legacy-home" bash "$REPO/skills/tunnel/kit-install.sh" "$legacy" --name nova >"$T/legacy.out" 2>&1 || rc=$?
+if [[ $rc == 0 ]] && grep -qx 'local edit' "$legacy/ops/tunnel/being-tunnel" \
+  && cmp -s "$REPO/skills/tunnel/being-tunnel" "$legacy/ops/tunnel/.kit-upgrade/being-tunnel" \
+  && grep -qP '^being-tunnel\tLOCAL CHANGES' "$legacy/ops/tunnel/.kit-upgrade/CHANGES.txt"; then
+  ok "pre-manifest component upgrade: succeeds, keeps local edit, stages and flags upstream"
+else bad "pre-manifest component upgrade: rc $rc"; fi
+
 # 5. Box hardening (dry run): our SSH file sorts before cloud-init's, suspend masked, xrdp path on request.
 printf '[being]\nname = "nova"\nlinux_user = "%s"\n[box]\noffice_subnet = "192.0.2.0/24"\n' "$(id -un)" >"$T/h.toml"
 "$REPO/scripts/harden-box.sh" --config "$T/h.toml" --desktop --rdp xrdp --dry-run >"$T/h.out" 2>&1 || true

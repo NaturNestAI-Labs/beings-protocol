@@ -39,7 +39,7 @@ kit_manifest_set() {
 
 # kit_place <tmp file> <dest>: add, keep, or stage; consumes the tmp file.
 kit_place() {
-  local tmp="$1" dest="$2" stage was
+  local tmp="$1" dest="$2" stage was man
   if [[ ! -e "$dest" ]]; then
     mkdir -p "$(dirname "$dest")"; mv "$tmp" "$dest"; KIT_ADDED=$((KIT_ADDED + 1)); kit_manifest_set "$dest"
   elif cmp -s "$tmp" "$dest"; then
@@ -47,7 +47,10 @@ kit_place() {
   else
     stage="$(dirname "$dest")/.kit-upgrade/$(basename "$dest")"
     mkdir -p "$(dirname "$stage")"; mv "$tmp" "$stage"; KIT_STAGED=$((KIT_STAGED + 1))
-    was="$(awk -F'\t' -v f="$(basename "$dest")" '$2 == f { print $1 }' "$(dirname "$dest")/.kit-manifest" 2>/dev/null)"
+    man="$(dirname "$dest")/.kit-manifest"; was=""
+    if [[ -f "$man" ]]; then
+      was="$(awk -F'\t' -v f="$(basename "$dest")" '$2 == f { print $1 }' "$man")"
+    fi
     [[ -f "$(dirname "$stage")/CHANGES.txt" ]] && sed -i "/^$(basename "$dest" | sed 's/[.[\*^$/]/\\&/g')\t/d" "$(dirname "$stage")/CHANGES.txt"   # one line per file
     if [[ -n "$was" && "$was" == "$(kit_sha "$dest")" ]]; then
       printf '%s\tupstream only: safe to swap in\n' "$(basename "$dest")" >> "$(dirname "$stage")/CHANGES.txt"

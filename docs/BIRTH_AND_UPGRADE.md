@@ -55,6 +55,8 @@ curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/inst
   adopt by hand. `.kit-upgrade/CHANGES.txt` marks each one "upstream only: safe to swap in" or "LOCAL CHANGES: merge by
   hand" (from the `.kit-manifest` hashes recorded at install), so an owner-approved local fix is never lost to a copy.
   Settings new in `.env.example` are appended to `.env`; existing values are kept.
+- On an upgrade from 0.4.0 there is no manifest yet, so every staged file shows `LOCAL CHANGES`. Diff each one
+  against the previously installed kit commit before keeping or replacing it.
 - Rollback: the Being's home is a git repo, so `git status` shows exactly what was added or appended.
 
 Suggested order for a Being that already works with people:

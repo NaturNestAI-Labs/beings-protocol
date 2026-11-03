@@ -57,4 +57,17 @@ run check >/dev/null; run skip "v$pv" >/dev/null; : >"$T/sent.html"; run check >
 # 6. The owner's reply is routed without a model: uppercase UPDATE or skip with a v-version, owner 1:1 only.
 grep -q 'u=re.match(r"^(UPDATE|skip)\\s+v' "$REPO/skills/teams-kit/being-handle" && ok "handler routes UPDATE/skip vX.Y.Z" || bad "handler route"
 
+# Missing launcher paths must reach the install guidance, not abort in command substitution.
+for kind in missing empty unrelated; do
+  w="$T/launcher-$kind"; mkdir -p "$w"
+  if [[ $kind != missing ]]; then mkdir -p "$w/bin"; fi
+  if [[ $kind == unrelated ]]; then printf '#!/bin/sh\nexit 0\n' >"$w/bin/helper"; fi
+  rc=0
+  HOME="$H" BEING_WORKSPACE="$w" BEING_RUNNER_ENV="$T/absent" \
+    "$REPO/skills/runner/being-update" status >"$T/launcher.out" 2>&1 || rc=$?
+  if [[ $rc == 2 ]] && grep -q "no launcher with 'update'" "$T/launcher.out"; then
+    ok "launcher $kind: explicit install guidance"
+  else bad "launcher $kind: rc $rc"; fi
+done
+
 echo "being-update: $fails failure(s)"; (( fails == 0 ))

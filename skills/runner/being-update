@@ -14,7 +14,10 @@ REF="${BEING_UPDATE_REF:-main}"                         # where new releases are
 REPO="${BEING_UPDATE_REPO:-VeltriaAI/beings-protocol}"  # where problem reports go as pull requests
 REPORT="${BEING_UPDATE_REPORT:-off}"                    # off | pr (opt-in)
 mkdir -p "$STATE"; chmod 700 "$STATE"; umask 077
-LAUNCHER="$(ls "$HOME_DIR"/bin/* 2>/dev/null | while read -r f; do grep -q '^cmd_update()' "$f" 2>/dev/null && { echo "$f"; break; }; done)"
+LAUNCHER=""
+for f in "$HOME_DIR"/bin/*; do
+  if [[ -f "$f" ]] && grep -q '^cmd_update()' "$f"; then LAUNCHER="$f"; break; fi
+done
 [[ -n "$LAUNCHER" ]] || { echo "no launcher with 'update' in $HOME_DIR/bin (install.sh --update --with operations)" >&2; exit 2; }
 OFFER="$STATE/offered.json"
 
