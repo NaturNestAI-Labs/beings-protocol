@@ -259,4 +259,4 @@ SemVer, independent of PROTOCOL_SPEC.md, cross-references pinned by version.
 
 ---
 
-*Part of the [Beings Protocol](https://github.com/VeltriaAI/beings-protocol). Keep it simple — markdown files, not complex frameworks.*
+*Part of the [Beings Protocol](https://github.com/NaturNestAI-Labs/beings-protocol). Keep it simple — markdown files, not complex frameworks.*
