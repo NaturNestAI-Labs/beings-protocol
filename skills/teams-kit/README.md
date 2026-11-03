@@ -338,3 +338,13 @@ Details moved out of the script headers, so comments stay short.
   the warm lane's process stays the same from message to message.
 - **Team work digest.** Open items come from ONE file the owner keeps for the team (`BEING_TEAM_PIPELINE`), only if its
   frontmatter says `share: team`; only unchecked `- [ ] ` lines go, and `@lanes: a,b` limits an item to those chats.
+
+### Shared-mailbox batches with one SEND
+
+With owner-access installed, `send-batch.mjs plan --manifest first.json --manifest
+second.json --approver-id "$APPROVER_ID"` posts one combined preview to the configured
+area approver's 1:1. The approver types exactly `SEND`. The manifest set and all file
+bytes are sealed; edits or added members need a fresh preview. Exactly one preview
+may be active, and every send must still fall within 24 hours of approval.
+See owner-access's **One SEND for shared-mailbox manifests** section for grants,
+recovery, scheduling, direct invocation and the legacy per-batch go path.

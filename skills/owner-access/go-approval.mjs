@@ -2,6 +2,7 @@
 // checkGo is pure (tested); readGo fetches the message with the Being's own session. Each go message works once.
 import { readFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 export const MAX_AGE_H = 24;
 const text = (h) => String(h || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
@@ -24,14 +25,27 @@ export function checkGo({ msg, chat, members, beingUpn, approvers, expect, used 
   if (text(msg.body?.content) !== text(expect)) return no(`go text must be exactly "${expect}"`);
   const at = Date.parse(msg.createdDateTime);
   if (notBefore && !(at >= Date.parse(notBefore))) return no('go is older than the batch it approves');
-  if (!(now - at <= MAX_AGE_H * 3600e3)) return no(`go is older than ${MAX_AGE_H}h`);
+  const ageError = approvalAgeError(msg.createdDateTime, now);
+  if (ageError) return no(ageError);
   return { approver: who };
+}
+
+export function approvalAgeError(created, now = Date.now()) {
+  const age = now - Date.parse(created);
+  if (!Number.isFinite(age) || age < 0) return 'approval time is invalid or in the future';
+  if (age >= MAX_AGE_H * 3600e3) return `go is older than ${MAX_AGE_H}h at actual send time; create a fresh preview and approval`;
+  return null;
 }
 
 const usedFile = (state) => path.join(state, 'owner-access', 'used-go.txt');
 export const usedGos = (state) => new Set(existsSync(usedFile(state)) ? readFileSync(usedFile(state), 'utf8').split('\n').filter(Boolean) : []);
 export function markUsed(state, msgId) {
   mkdirSync(path.dirname(usedFile(state)), { recursive: true, mode: 0o700 });
+  const claims = path.join(state, 'owner-access', 'go-claims');
+  mkdirSync(claims, { recursive: true, mode: 0o700 });
+  if (usedGos(state).has(msgId)) throw new Error('that go was already used');
+  try { mkdirSync(path.join(claims, createHash('sha256').update(msgId).digest('hex')), { mode: 0o700 }); }
+  catch { throw new Error('that go was already used or cannot be claimed'); }
   appendFileSync(usedFile(state), `${msgId}\n`, { mode: 0o600 });
 }
 

@@ -20,6 +20,7 @@ const opt = (f) => { const i = argv.indexOf(f); return i === -1 ? '' : (argv[i +
 const has = (f) => argv.includes(f);
 const [cmd, arg1] = argv;
 const USAGE = 'usage: send-batch.mjs plan --drafts D45-D79 [--label L] [--dry-run]\n'
+  + '  | plan --manifest file [--manifest file ...] --approver-id <configured id> [--dry-run]\n'
   + '  | plan --recipients list.csv --subject S [--cc a,b] [--attach /abs/f] [--label L] [--dry-run] < template.md\n'
   + '  | send [Bn] --chat <owner 1:1> --msg <owner command id>  | skip Bn --chat .. --msg ..\n'
   + '  | dry-run Bn  | status [Bn]  | stop Bn';
@@ -64,9 +65,20 @@ function ledgerOf(id) {
 }
 const result = (id, row) => appendFileSync(path.join(DIR, `${id}.results.jsonl`), JSON.stringify({ at: new Date().toISOString(), ...row }) + '\n', { mode: 0o600 });
 
+function sharedTool(args) {
+  const tool = path.join(here, 'shared-mailbox-drafts.mjs');
+  if (!existsSync(tool)) fail('install owner-access before planning shared-mailbox batches', 2);
+  const child = spawnSync(process.execPath, [tool, ...args], { stdio: 'inherit', env: process.env });
+  process.exit(child.status ?? 1);
+}
+
 // ---- plan: build the batch, dedupe, post one preview (or print it with --dry-run) ----
 async function plan() {
   if (standby()) fail('standby host: batches disabled', 3);
+  if (has('--manifest')) {
+    if (has('--drafts') || has('--recipients')) fail('shared manifests cannot be mixed with owner drafts or templates', 2);
+    sharedTool(['plan-set', ...argv.slice(1)]);
+  }
   const label = opt('--label').slice(0, 80), dry = has('--dry-run');
   let rows = [];
   if (opt('--drafts')) {
@@ -129,6 +141,11 @@ async function decide(verb) {
   if (!id) { if (open.length !== 1) stop(open.length ? `More than one batch is open (${open.join(', ')}): type SEND with its number, e.g. SEND ${open.at(-1)}.` : 'There is no open batch to send.'); id = open[0]; }
   const b = loadB(id);
   if (!b) stop(`I don't have a batch ${id}.`);
+  if (b.kind === 'shared-manifest-set') {
+    if (verb !== 'send') stop('Shared-mailbox previews need a fresh plan to replace them.');
+    if (open.length !== 1 || open[0] !== id) stop('SEND needs exactly one open preview; close other batches first.');
+    sharedTool(['send', '--preview', bfile(id), '--go-chat', CHAT, '--go-msg', MSG]);
+  }
   const dead = b.status === 'sending' && !existsSync(path.join(DIR, `${id}.lock`));   // its run died: resume from the ledger
   if (!['open', 'partial'].includes(b.status) && !dead) stop(`Batch ${id} is already ${b.status}.`);
   if (!fresh(b)) stop(`Batch ${id} is older than ${MAX_AGE_H}h; ask me for a fresh one.`);
@@ -236,7 +253,7 @@ async function run(id, { dry = false, batch } = {}) {
 
 function status() {
   const list = arg1 ? [loadB(arg1)].filter(Boolean) : allB();
-  for (const b of list) console.log(`${b.id} ${b.status} rows=${b.rows.length} left=${b.left?.length || 0} created=${b.created}${b.counts ? ` sent=${b.counts.sent} failed=${b.counts.failed} notSent=${b.counts.notSent}` : ''}${b.label ? ` "${b.label}"` : ''}`);
+  for (const b of list) console.log(`${b.id} ${b.status} rows=${b.kind === 'shared-manifest-set' ? b.entries.reduce((n, e) => n + e.manifest.rows.length, 0) : b.rows.length} left=${b.left?.length || 0} created=${b.created}${b.counts ? ` sent=${b.counts.sent} failed=${b.counts.failed} notSent=${b.counts.notSent}` : ''}${b.label ? ` "${b.label}"` : ''}`);
 }
 
 if (cmd === 'plan') await plan();

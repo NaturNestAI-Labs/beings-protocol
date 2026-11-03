@@ -6,7 +6,11 @@ Protocol and Operations Kit versions move together: every release bumps `PROTOCO
 
 ## Unreleased
 
+### Added
+- One uppercase `SEND` can approve a sealed set of shared-mailbox manifests from one combined preview, with configured approver identity, unchanged 1:1 messages, atomic replay protection and per-batch ledgers.
+
 ### Fixed
+- Shared-mailbox approvals expire at actual send time, including delayed and scheduled sends; every mail rechecks approval and refuses at 24 hours. Legacy exact per-batch go commands remain supported.
 - Owner-access and monitor installers now preserve changed local files and stage upstream copies with manifest reports, including pre-manifest installations.
 - Teams verification sends test messages only with explicit `--send`; `--no-send` remains supported for update jobs, and waiting for a reply requires `--send`.
 

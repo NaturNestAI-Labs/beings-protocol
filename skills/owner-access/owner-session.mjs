@@ -9,7 +9,7 @@ import { kitEnv, ownerDelegate, mailCache } from './kit-env.mjs';
 import { currentScope } from './scope.mjs';
 import { logComms } from './comms-log.mjs';
 import { KIT, loadConfig, abilityOn, paused, pauseFile, approversFor } from './oa-config.mjs';
-import { checkGo, readGo, usedGos, markUsed } from './go-approval.mjs';
+import { checkGo, readGo, usedGos, markUsed, approvalAgeError } from './go-approval.mjs';
 import { SCOPES, checkStamp, separationProblems } from './sessions.mjs';
 
 export const APPROVED_SCRIPTS = new Set(['owner-web.mjs', 'shared-mailbox-drafts.mjs', 'shared-inbox-monitor.mjs',
@@ -91,7 +91,7 @@ export const beingTeams = (s) => connect({ upn: s.beingUpn, cache: s.beingCache,
 
 // Checks a "go" typed by an approver for `area` in their 1:1 with the Being, read with the Being's own Teams session.
 // Marks it used, so one go approves one action. Exits 3 when it does not check out.
-export async function requireGo(s, { area, expect, chatId, msgId, notBefore }) {
+export async function requireGo(s, { area, expect, chatId, msgId, notBefore, verify, receipt = false }) {
   if (!chatId || !msgId) fail(`needs --go-chat <chat id> --go-msg <message id> of "${expect}" typed by an approver`, 2);
   const being = await beingTeams(s);
   let got;
@@ -99,6 +99,17 @@ export async function requireGo(s, { area, expect, chatId, msgId, notBefore }) {
   const r = checkGo({ ...got, beingUpn: s.beingUpn, approvers: approversFor(s.cfg, area, s.ownerUpn), expect,
     used: usedGos(s.state), notBefore });
   if (r.error) fail(`blocked: ${r.error}; nothing done`, 3);
+  if (verify) await verify({ ...got, g: being.g });
   markUsed(s.state, msgId);
-  return r.approver;
+  if (!receipt) return r.approver;
+  return { approver: r.approver, assertFresh() {
+    const error = approvalAgeError(got.msg.createdDateTime);
+    if (error) throw new Error(error);
+  }, async recheck() {
+    const current = await readGo(being.g, chatId, msgId);
+    const checked = checkGo({ ...current, beingUpn: s.beingUpn, approvers: approversFor(s.cfg, area, s.ownerUpn), expect, notBefore });
+    if (checked.error) throw new Error(checked.error);
+    if (current.msg.createdDateTime !== got.msg.createdDateTime) throw new Error('approval changed');
+    if (verify) await verify({ ...current, g: being.g });
+  } };
 }

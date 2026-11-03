@@ -209,3 +209,55 @@ Two-user layout: these tools run as the kit user. Model users reach them only if
 `isolation/make-shims` for the owner lane only).
 
 Tests: `node --test` in `skills/owner-access` (needs the sibling `skills/teams-kit`).
+
+## One SEND for shared-mailbox manifests
+
+Install both teams-kit and owner-access. Create and review the usual manifests, then
+run from the installed kit under an existing owner-lane grant:
+
+```sh
+node send-batch.mjs plan --manifest first.json --manifest second.json --approver-id "$APPROVER_ID"
+```
+
+The selected directory object ID must belong to an approver already allowed by
+`approversFor` for the configured shared-mailbox area. No person is built into the
+code. The Being posts one preview in that approver's verified 1:1: every batch,
+mail count, To and CC recipients, subjects, total and full SHA-256 set digest.
+`--dry-run` prints the preview without storing or posting it.
+
+The approver types exactly uppercase `SEND`, unedited. The existing handler's
+`send-batch.mjs send --chat ... --msg ...` path delegates to the shared-mailbox
+sender; an authorized owner-lane worker can also call
+`shared-mailbox-drafts.mjs send --preview <saved-preview> --go-chat ... --go-msg ...`.
+The latter supports a configured area approver's message without granting that
+person an owner-session lane. Both paths require exactly one active batch preview;
+resolve other open batches before asking for SEND.
+
+The seal covers canonical absolute file names, set membership and the complete
+bytes of every manifest. Reordering arguments is harmless. Adding, removing,
+replacing, relocating or editing a selected manifest requires a fresh preview and
+new SEND. Optional repeated `--manifest` arguments on the direct send path must
+match the whole sealed set. Unselected files are never discovered or sent: creating
+an unrelated file beside a manifest does not add it to the approved set.
+
+The sender fetches the approval and original preview again, verifies the configured
+approver, exact 1:1, Being-authored unchanged preview, exact SEND, chronology and
+age, then claims the message atomically. A failed or interrupted run consumes its
+approval: reconcile existing ledgers and retire the old preview before creating a
+new one. Do not delete consumption records or uncertain ledger entries to retry.
+A stopped preview also refuses before the next send. Existing ownership checks,
+ability gates, session separation, live draft preflight and per-batch ledgers remain.
+
+**Scheduled sends:** expiry is measured at actual send time, not scheduling time.
+Approval is checked again before every mail, after pacing delays; a synchronous
+clock check immediately precedes the transport call. At 24 hours or later it stops
+with `go is older than 24h at actual send time; create a fresh preview and approval`.
+Earlier completed mails remain ledgered. Scheduling a job never extends approval
+or reserves a future sending right. Invalid or future timestamps also refuse.
+The legacy `go <batch> <fingerprint>` command remains supported and receives the
+same actual-send-time check. No scheduler is added by this feature.
+
+The seal covers manifest contents, not fields absent from legacy manifests: those
+manifests describe draft identifiers, recipients, subject and attachment name, not
+a snapshot of live body or attachment bytes. Existing live draft checks still apply;
+this feature does not promise an immutable remote draft body.

@@ -2,13 +2,14 @@
 // Unsent drafts in a shared mailbox through the owner's session; sends only a named, reviewed batch after a go.
 // Usage: README.md "Shared mailbox drafts". Dry run unless --create / --update / send with a valid go.
 import './oa-env.mjs';
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, statSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fail } from './graph.mjs';
-import { openOwnerAccess, preflight, requireGo, logAsOwner, reportToOwner, esc } from './owner-session.mjs';
+import { openOwnerAccess, preflight, requireGo, logAsOwner, reportToOwner, esc, beingTeams } from './owner-session.mjs';
 import { draftsRoute, guardedGraph, browserRequestAllowed, OUTLOOK_API } from './guards.mjs';
-import { loadConfig } from './oa-config.mjs';
+import { sealManifests, checkManifestSet, renderManifestSet, checkSetApproval } from './manifest-set.mjs';
+import { loadConfig, approversFor } from './oa-config.mjs';
 import { routeFor } from './browser-route.mjs';
 import { outlookFromBrowser } from './owner-browser.mjs';
 import { normalizeDraft, draftKey, rcpts, validateManifest, preflightProblems, matchOwn } from './mailbox-lib.mjs';
@@ -16,12 +17,14 @@ import { planOf, withLedger, fingerprint } from './ledger.mjs';
 
 const { positionals: [cmd], values: o } = parseArgs({ allowPositionals: true, options: {
   input: { type: 'string' }, attach: { type: 'string' }, limit: { type: 'string' }, create: { type: 'boolean' }, update: { type: 'boolean' },
-  body: { type: 'boolean' }, batch: { type: 'string' }, out: { type: 'string' }, manifest: { type: 'string' },
+  body: { type: 'boolean' }, batch: { type: 'string' }, out: { type: 'string' }, manifest: { type: 'string', multiple: true }, preview: { type: 'string' }, 'approver-id': { type: 'string' }, 'dry-run': { type: 'boolean' },
   'go-chat': { type: 'string' }, 'go-msg': { type: 'string' } } });
 const USAGE = 'usage: shared-mailbox-drafts.mjs create --input drafts.json [--attach f] [--limit N] [--create]\n'
   + '  | update --input drafts.json [--body] [--update]  | plan --batch <name> --input drafts.json [--attach f] --out manifest.json\n'
+  + '  | plan-set --manifest file [--manifest file ...] --approver-id <id> [--dry-run]\n'
+  + '  | send --preview file --go-chat <id> --go-msg <id>\n'
   + '  | preflight --manifest m.json  | send --manifest m.json --go-chat <id> --go-msg <id>  | sent-check --manifest m.json';
-if (!['create', 'update', 'plan', 'preflight', 'send', 'sent-check'].includes(cmd)) fail(USAGE, 2);
+if (!['create', 'update', 'plan', 'plan-set', 'preflight', 'send', 'sent-check'].includes(cmd)) fail(USAGE, 2);
 const SEND = cmd === 'send';
 const ability = SEND ? 'shared_mailbox_send' : 'shared_mailbox_drafts';
 const really = (cmd === 'create' && o.create) || (cmd === 'update' && o.update) || SEND;
@@ -48,11 +51,42 @@ const attachment = () => {
   if (statSync(o.attach).size >= 3e6) fail('attachment must be under 3 MB', 2);
   return { '@odata.type': '#microsoft.graph.fileAttachment', name: path.basename(o.attach), contentBytes: readFileSync(o.attach).toString('base64') };
 };
-const loadManifest = () => { if (!o.manifest) fail('--manifest is required', 2); const m = validateManifest(JSON.parse(readFileSync(o.manifest, 'utf8'))); if (m.mailbox !== MAILBOX) fail('manifest is for another mailbox', 2);
+const checkOwned = (m) => { validateManifest(m); if (m.mailbox !== MAILBOX) fail('manifest is for another mailbox', 2);
   const mine = new Set(own().map((d) => d.id));
   if (m.rows.some((r) => !mine.has(r.id))) fail('manifest lists a draft the Being did not create', 2);
   return m;
 };
+const loadManifest = () => {
+  if (o.manifest?.length !== 1) fail('legacy send requires exactly one --manifest', 2);
+  return checkOwned(JSON.parse(readFileSync(o.manifest[0], 'utf8')));
+};
+
+if (cmd === 'plan-set') {
+  const sealed = sealManifests(o.manifest || []);
+  sealed.entries.forEach((e) => checkOwned(e.manifest));
+  if (!o['approver-id']) fail('plan-set needs --approver-id from configured approvers', 2);
+  const batches = path.join(s0.state, 'batches');
+  mkdirSync(batches, { recursive: true, mode: 0o700 });
+  const ids = readdirSync(batches).filter((f) => /^B\d+\.json$/.test(f)).map((f) => Number(f.slice(1, -5)));
+  const p = { id: `B${Math.max(0, ...ids) + 1}`, kind: 'shared-manifest-set', ...sealed,
+    approverId: o['approver-id'], created: new Date().toISOString(), status: 'open', rows: [] };
+  const html = renderManifestSet(p);
+  if (o['dry-run']) { console.log(html); process.exit(0); }
+  const { g } = await beingTeams(s0);
+  const allowed = approversFor(s0.cfg, AREA, s0.ownerUpn);
+  const chats = await g(`/me/chats?$filter=chatType eq 'oneOnOne'&$expand=members&$top=50`);
+  const matches = (chats.value || []).filter((c) => c.chatType === 'oneOnOne' && c.members?.length === 2
+    && c.members.some((m) => m.userId === p.approverId && allowed.has(String(m.email || '').toLowerCase()))
+    && c.members.some((m) => String(m.email || '').toLowerCase() === s0.beingUpn));
+  if (matches.length !== 1) fail('need exactly one verified 1:1 with the configured approver', 3);
+  const file = path.join(batches, `${p.id}.json`);
+  writeFileSync(file, JSON.stringify({ ...p, status: 'unposted' }), { flag: 'wx', mode: 0o600 });
+  const posted = await g(`/chats/${encodeURIComponent(matches[0].id)}/messages`, { body: { body: { contentType: 'html', content: html } } });
+  if (!posted.id || !posted.createdDateTime) fail('preview delivery could not be verified', 3);
+  writeFileSync(file, JSON.stringify({ ...p, promptChatId: matches[0].id, promptMessageId: posted.id, promptAt: posted.createdDateTime }), { mode: 0o600 });
+  console.log(`${p.id}: preview posted; approver types SEND once.`);
+  process.exit(0);
+}
 
 // Offline dry runs need no sign-in.
 if (cmd === 'create' && !really) {
@@ -152,53 +186,78 @@ try {
     writeFileSync(o.out, JSON.stringify(manifest, null, 2) + '\n', { mode: 0o600 });
     console.log(`manifest ${o.out}: ${rows.length} draft(s). After review, an approver types in their 1:1 with the Being:\n  go ${o.batch} ${fingerprint(manifest)}`);
   } else {
-    const m = loadManifest(), fp = fingerprint(m), ledgerFile = path.join(DIR, `${m.batch}.ledger.jsonl`);
-    const plan = planOf(m.batch, m.rows.map((r) => ({ id: r.id, kind: 'mail', title: r.subject })));
-    const sent = await sentKeys();
-    const inSent = (r) => (sent.get(draftKey(r.subject, r.to)) || []).some((cc) => r.cc.every((c) => cc.includes(c)));
-    if (cmd === 'sent-check') {
-      const missing = m.rows.filter((r) => !inSent(r));
-      console.log(`in Sent Items: ${m.rows.length - missing.length}/${m.rows.length}`);
-      for (const r of missing) console.log(`NOT IN SENT ITEMS: ${r.subject}`);
-      process.exit(missing.length ? 1 : 0);
+    const preview = o.preview ? JSON.parse(readFileSync(o.preview, 'utf8')) : null;
+    if (preview && (!SEND || preview.kind !== 'shared-manifest-set' || preview.status !== 'open')) throw new Error('preview is not open for sending');
+    const manifests = preview ? checkManifestSet(preview, o.manifest).map(checkOwned) : [loadManifest()];
+    let approval;
+    if (preview) {
+      approval = await requireGo(s, { area: AREA, expect: 'SEND', chatId: o['go-chat'], msgId: o['go-msg'], notBefore: preview.promptAt, receipt: true,
+        verify: async (got) => {
+          if (existsSync(path.join(s.state, 'batches', 'STOP')) || existsSync(path.join(s.state, 'batches', `${preview.id}.stop`))) throw new Error('batch stopped');
+          const active = readdirSync(path.join(s.state, 'batches')).filter((f) => /^B\d+\.json$/.test(f))
+            .map((f) => JSON.parse(readFileSync(path.join(s.state, 'batches', f), 'utf8')))
+            .filter((b) => ['open', 'partial', 'sending'].includes(b.status) && Date.now() - Date.parse(b.created) < 24 * 3600e3);
+          if (active.length !== 1 || active[0].id !== preview.id) throw new Error('SEND is ambiguous; need exactly one active preview');
+          if (active[0].digest !== preview.digest || JSON.stringify(active[0].entries) !== JSON.stringify(preview.entries)) throw new Error('stored manifest set changed after approval');
+          const prompt = await got.g(`/chats/${encodeURIComponent(preview.promptChatId)}/messages/${encodeURIComponent(preview.promptMessageId)}`);
+          checkSetApproval({ ...got, preview, prompt, beingUpn: s.beingUpn });
+          checkManifestSet(preview, o.manifest);
+        } });
+      writeFileSync(o.preview, JSON.stringify({ ...preview, status: 'sending' }), { mode: 0o600 });
     }
-    if (SEND) await requireGo(s, { area: AREA, expect: `go ${m.batch} ${fp}`, chatId: o['go-chat'], msgId: o['go-msg'], notBefore: m.created });
-    await withLedger(ledgerFile, plan, async (ledger) => {
-      const problems = [];
-      for (const r of m.rows) {
-        const st = ledger.records.get(r.id)?.state;
-        if (st === 'done') { console.log(`ALREADY SENT (ledger): ${r.subject}`); continue; }
-        const { m: msg, atts } = await readDraft(r.id);
-        // A send that was started but not confirmed counts as done only when the draft left Drafts and is in Sent Items.
-        if (st === 'started') {
-          if (!msg && inSent(r)) { await ledger.put({ id: r.id, kind: 'mail' }, 'done', { reconciled: true }); console.log(`CONFIRMED SENT: ${r.subject}`); continue; }
-          problems.push(`${r.subject}: unconfirmed send from an earlier run; check Sent Items by hand`); continue;
+    for (const m of manifests) {
+      const fp = fingerprint(m), ledgerFile = path.join(DIR, `${m.batch}.ledger.jsonl`);
+      const plan = planOf(m.batch, m.rows.map((r) => ({ id: r.id, kind: 'mail', title: r.subject })));
+      const sent = await sentKeys();
+      const inSent = (r) => (sent.get(draftKey(r.subject, r.to)) || []).some((cc) => r.cc.every((c) => cc.includes(c)));
+      if (cmd === 'sent-check') {
+        const missing = m.rows.filter((r) => !inSent(r));
+        console.log(`in Sent Items: ${m.rows.length - missing.length}/${m.rows.length}`);
+        for (const r of missing) console.log(`NOT IN SENT ITEMS: ${r.subject}`);
+        process.exit(missing.length ? 1 : 0);
+      }
+      if (SEND && !preview) approval = await requireGo(s, { area: AREA, expect: `go ${m.batch} ${fp}`, chatId: o['go-chat'], msgId: o['go-msg'], notBefore: m.created, receipt: true });
+      await withLedger(ledgerFile, plan, async (ledger) => {
+        const problems = [];
+        for (const r of m.rows) {
+          const st = ledger.records.get(r.id)?.state;
+          if (st === 'done') { console.log(`ALREADY SENT (ledger): ${r.subject}`); continue; }
+          const { m: msg, atts } = await readDraft(r.id);
+          // A send that was started but not confirmed counts as done only when the draft left Drafts and is in Sent Items.
+          if (st === 'started') {
+            if (!msg && inSent(r)) { await ledger.put({ id: r.id, kind: 'mail' }, 'done', { reconciled: true }); console.log(`CONFIRMED SENT: ${r.subject}`); continue; }
+            problems.push(`${r.subject}: unconfirmed send from an earlier run; check Sent Items by hand`); continue;
+          }
+          const p = preflightProblems(r, msg, atts, folder.id, MAILBOX);
+          console.log(`${p.length ? 'PREFLIGHT FAIL' : 'PREFLIGHT OK'}: ${r.to.join('; ')} | ${r.subject}${p.length ? ` -> ${p.join(', ')}` : ''}`);
+          if (p.length) problems.push(`${r.subject}: ${p.join(', ')}`);
         }
-        const p = preflightProblems(r, msg, atts, folder.id, MAILBOX);
-        console.log(`${p.length ? 'PREFLIGHT FAIL' : 'PREFLIGHT OK'}: ${r.to.join('; ')} | ${r.subject}${p.length ? ` -> ${p.join(', ')}` : ''}`);
-        if (p.length) problems.push(`${r.subject}: ${p.join(', ')}`);
-      }
-      if (problems.length) throw new Error(`not sending: ${problems.join(' | ')}`);
-      if (!SEND) { console.log(`preflight ok; go command: go ${m.batch} ${fp}`); return; }
-      const pending = m.rows.filter((r) => ledger.records.get(r.id)?.state !== 'done');
-      const gap = Number(box.send_gap_seconds ?? 3) * 1000;
-      let n = 0;
-      for (const r of pending) {
-        if (n) await new Promise((res) => setTimeout(res, gap));
-        access.sendIds = new Set([r.id]);
-        await ledger.put({ id: r.id, kind: 'mail' }, 'started');
-        await g(`${ROOT}/messages/${encodeURIComponent(r.id)}/send`, { method: 'POST', headers: H });
-        await ledger.put({ id: r.id, kind: 'mail' }, 'done');
-        access.sendIds = new Set();
-        n++;
-        logAsOwner(ability, { channel: 'mail', mailbox: MAILBOX, action: 'sent', batch: m.batch, to: r.to, cc: r.cc, subject: r.subject });
-        console.log(`SENT ${n}/${pending.length}: ${r.to.join('; ')} | ${r.subject}`);
-      }
-      const after = await sentKeys();
-      const missing = m.rows.filter((r) => !(after.get(draftKey(r.subject, r.to)) || []).some((cc) => r.cc.every((c) => cc.includes(c))));
-      reportToOwner(s, `Sent batch <b>${esc(m.batch)}</b> from ${esc(MAILBOX)} as you: ${n} sent now, ${m.rows.length - pending.length} earlier; `
-        + `${m.rows.length - missing.length}/${m.rows.length} confirmed in Sent Items.`);
-      if (missing.length) { for (const r of missing) console.log(`NOT YET IN SENT ITEMS: ${r.subject}`); process.exitCode = 1; }
-    });
+        if (problems.length) throw new Error(`not sending: ${problems.join(' | ')}`);
+        if (!SEND) { console.log(`preflight ok; go command: go ${m.batch} ${fp}`); return; }
+        const pending = m.rows.filter((r) => ledger.records.get(r.id)?.state !== 'done');
+        const gap = Number(box.send_gap_seconds ?? 3) * 1000;
+        let n = 0;
+        for (const r of pending) {
+          if (n) await new Promise((res) => setTimeout(res, gap));
+          await approval.recheck();
+          access.sendIds = new Set([r.id]);
+          await ledger.put({ id: r.id, kind: 'mail' }, 'started');
+          if (preview) checkManifestSet(preview, o.manifest);
+          approval.assertFresh();
+          await g(`${ROOT}/messages/${encodeURIComponent(r.id)}/send`, { method: 'POST', headers: H });
+          await ledger.put({ id: r.id, kind: 'mail' }, 'done');
+          access.sendIds = new Set();
+          n++;
+          logAsOwner(ability, { channel: 'mail', mailbox: MAILBOX, action: 'sent', batch: m.batch, to: r.to, cc: r.cc, subject: r.subject });
+          console.log(`SENT ${n}/${pending.length}: ${r.to.join('; ')} | ${r.subject}`);
+        }
+        const after = await sentKeys();
+        const missing = m.rows.filter((r) => !(after.get(draftKey(r.subject, r.to)) || []).some((cc) => r.cc.every((c) => cc.includes(c))));
+        reportToOwner(s, `Sent batch <b>${esc(m.batch)}</b> from ${esc(MAILBOX)} as you: ${n} sent now, ${m.rows.length - pending.length} earlier; `
+          + `${m.rows.length - missing.length}/${m.rows.length} confirmed in Sent Items.`);
+        if (missing.length) { for (const r of missing) console.log(`NOT YET IN SENT ITEMS: ${r.subject}`); process.exitCode = 1; }
+      });
+    }
+    if (preview) writeFileSync(o.preview, JSON.stringify({ ...preview, status: 'done' }), { mode: 0o600 });
   }
 } catch (e) { fail(`shared-mailbox-drafts: ${e.message}`); }
