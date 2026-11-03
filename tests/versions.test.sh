@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # versions: install.sh versions, the top CHANGELOG entry and the update command agree.
 set -euo pipefail
+# Never the live Being: kit tools let BEING_* from the environment win over the fixture (job list, hooks, kit home).
+while read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(BEING_|OWNER_|M365_|HOOK_)' || true)
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 fails=0; ok() { echo "  ok  $1"; }; bad() { echo "  FAIL $1"; fails=$((fails + 1)); }
 pv="$(sed -n 's/^PROTOCOL_VERSION="\(.*\)"/\1/p' "$REPO/install.sh")"

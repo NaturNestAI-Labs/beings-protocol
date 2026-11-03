@@ -4,6 +4,8 @@
 
 # shellcheck disable=SC2015  # ok/bad reporting chains
 set -euo pipefail
+# Never the live Being: kit tools let BEING_* from the environment win over the fixture (job list, hooks, kit home).
+while read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(BEING_|OWNER_|M365_|HOOK_)' || true)
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 TMP=$(mktemp -d); trap 'kill "${SRV:-0}" 2>/dev/null || true; rm -rf "$TMP"' EXIT
 fails=0; ok() { echo "  ok  $1"; }; bad() { echo "  FAIL $1"; fails=$((fails + 1)); }

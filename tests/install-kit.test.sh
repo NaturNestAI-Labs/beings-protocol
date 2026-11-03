@@ -3,6 +3,8 @@
 # TEST_BASH=/path/to/bash-3.2 runs install.sh under that shell (macOS default).
 # shellcheck disable=SC2015,SC2016  # ok/bad reporting chains; literal $ in owner fixtures is intended
 set -euo pipefail
+# Never the live Being: kit tools let BEING_* from the environment win over the fixture (job list, hooks, kit home).
+while read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(BEING_|OWNER_|M365_|HOOK_)' || true)
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 fails=0; ok() { echo "  ok  $1"; }; bad() { echo "  FAIL $1"; fails=$((fails + 1)); }

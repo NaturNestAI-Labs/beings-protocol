@@ -2,6 +2,8 @@
 # kit-fixes: field fixes from Beings on teammates' boxes (CHANGELOG 0.5.0): owner id, persona, attachments, upgrades,
 # SSH hardening, suspend, xrdp, cron time. No network, no sudo, no live services.
 set -euo pipefail
+# Never the live Being: kit tools let BEING_* from the environment win over the fixture (job list, hooks, kit home).
+while read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(BEING_|OWNER_|M365_|HOOK_)' || true)
 unset TMUX TMUX_PANE
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 TK="$REPO/skills/teams-kit"
@@ -73,5 +75,9 @@ TZ=UTC PATH="$T/bin:$PATH" BEING_HOME="$T/mh" BEING_NAME=nova BEING_TZ=Asia/Kolk
   bash "$REPO/skills/memory/bin/being-memory-sync" install --cron >/dev/null 2>&1 || true
 grep -q '^30 16 \* \* \* ' "$T/crontab.out" 2>/dev/null && ! grep -q CRON_TZ "$T/crontab.out" && ok "cron in box time (22:00 IST = 16:30 UTC)" \
   || bad "cron line: $(cat "$T/crontab.out" 2>/dev/null)"
+
+# 7. Run on a Being's box, a test must not reach the live Being: every shell test drops BEING_*/OWNER_*/HOOK_* first.
+miss=""; for f in "$REPO"/tests/*.test.sh; do grep -qF "grep -E '^(BEING_|OWNER_|M365_|HOOK_)'" "$f" || miss+=" $(basename "$f")"; done
+[[ -z $miss ]] && ok "tests drop the host Being's environment" || bad "tests keep the host environment:$miss"
 
 echo "kit-fixes: $fails failure(s)"; (( fails == 0 ))

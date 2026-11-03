@@ -7,7 +7,7 @@ REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 SRC="$REPO/skills/teams-kit"
 [[ -d "$SRC/node_modules/@azure/msal-node" ]] || { echo "teams-kit-runtime: run npm install in skills/teams-kit first"; exit 1; }
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-while read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(BEING_|OWNER_|M365_)' || true)
+while read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(BEING_|OWNER_|M365_|HOOK_)' || true)
 fails=0; ok() { echo "  ok  $1"; }; bad() { echo "  FAIL $1"; fails=$((fails + 1)); }
 
 KIT="$TMP/home/nova/ops/teams-kit"; ST="$KIT/state"; mkdir -p "$KIT" "$ST" "$TMP/bin" "$TMP/home/nova/.beings" "$TMP/home/.codex"
