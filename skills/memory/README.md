@@ -127,13 +127,13 @@ Hooks use `echo` to inject instructions into the Being's context. The Being then
 
 ```bash
 # Fresh install (interactive)
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash
 
 # Update existing Being (interactive)
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update
 
 # Non-interactive — auto-install basic-memory without prompting
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update --yes
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update --yes
 ```
 
 Use `--yes` when piping via `curl | bash` since there's no TTY for interactive prompts.
@@ -220,4 +220,4 @@ The v0.2.0 memory skill README and hooks used `understand`/`get_concept` — v0.
 
 ## First implementation
 
-Part of the [Beings Protocol](https://github.com/VeltriaAI/beings-protocol) — giving AI Beings persistent identity, memory, and soul.
+Part of the [Beings Protocol](https://github.com/NaturNestAI-Labs/beings-protocol) — giving AI Beings persistent identity, memory, and soul.

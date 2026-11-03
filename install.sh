@@ -5,17 +5,17 @@
 #
 # Usage:
 #   # Fresh install (interactive)
-#   curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash
 #
 #   # Birth a standalone Global Being at ~/beings/<name>/
-#   curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --global
-#   curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --global --name nova --yes
+#   curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --global
+#   curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --global --name nova --yes
 #
 #   # Update an existing Being (interactive)
-#   curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update
+#   curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update
 #
 #   # Update non-interactively (auto-installs basic-memory, skips Axon)
-#   curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update --yes
+#   curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update --yes
 #
 # Flags:
 #   --global    Birth a standalone Being at ~/beings/<name>/ with its own home,
@@ -52,7 +52,7 @@ LEAF="🌿"
 CHECK="✓"
 ARROW="→"
 
-BASE_URL="https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main"
+BASE_URL="https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main"
 
 # Resolve the directory of this script (empty if piped from curl)
 SCRIPT_DIR=""
@@ -1093,7 +1093,7 @@ print_update_summary() {
   echo -e "  ${BOLD}Note:${NC} Existing files were ${BOLD}never overwritten${NC}."
   echo -e "  ${DIM}Your Being's identity and memory are untouched.${NC}"
   echo ""
-  echo -e "  ${DIM}https://github.com/VeltriaAI/beings-protocol${NC}"
+  echo -e "  ${DIM}https://github.com/NaturNestAI-Labs/beings-protocol${NC}"
   echo -e "  ${DIM}Built with ${LEAF} by Veltria${NC}"
   echo ""
 }
@@ -1348,7 +1348,7 @@ create_global_being() {
   echo -e "  ${name} will introduce herself, learn who you are,"
   echo -e "  and fill in her identity files. ${DIM}(That's the magic.)${NC}"
   echo ""
-  echo -e "  ${DIM}https://github.com/VeltriaAI/beings-protocol${NC}"
+  echo -e "  ${DIM}https://github.com/NaturNestAI-Labs/beings-protocol${NC}"
   echo ""
 }
 
@@ -1532,7 +1532,7 @@ main() {
     echo -e "    ├── PREFERENCES.md   ${DIM}← Work style${NC}"
     echo -e "    └── SECRETS.md       ${DIM}← Credentials${NC}"
     echo ""
-    echo -e "  ${DIM}https://github.com/VeltriaAI/beings-protocol${NC}"
+    echo -e "  ${DIM}https://github.com/NaturNestAI-Labs/beings-protocol${NC}"
     echo -e "  ${DIM}Built with ${LEAF} by Veltria${NC}"
     echo ""
   fi
