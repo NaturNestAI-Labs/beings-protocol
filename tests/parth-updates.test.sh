@@ -2,7 +2,7 @@
 # Offline regressions for additive component installs and verification send opt-in.
 set -euo pipefail
 unset TMUX TMUX_PANE
-for v in $(env | grep -oE '^(BEING|OWNER|M365|HOOK)_[A-Z_]*'); do unset "$v"; done
+while read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(BEING_|OWNER_|M365_|HOOK_)' || true)
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 export HOME="$T/home" XDG_CONFIG_HOME="$T/config"
