@@ -84,6 +84,14 @@ Steps (in `ops/teams-kit`, after `set -a; . ./.env; set +a`):
        Being Outlook, owner Teams, owner Outlook) and fails if one resolves to the wrong account, if owner and Being
        share a file or profile, or if an owner cache exists while owner access is off.
 
+Verification sends no messages by default. For an explicitly approved test DM and blocker-path test,
+run `./verify.sh --send`; add `--wait-reply <minutes>` only with `--send`.
+Update jobs retain `--no-send`. These checks still contact the API to verify sessions.
+
+Owner-access and monitor updates keep existing changed files and stage upstream copies in
+`.kit-upgrade/`. Review `CHANGES.txt` and merge local guards by hand; do not copy over them.
+Files from installations without a manifest are conservatively treated as local changes.
+
 ## 4. Claude and Codex (owner)
 
 - [ ] A **Claude seat** for the Being (`[access].claude`) and, if ticked, a **Codex login** (`[access].codex`).

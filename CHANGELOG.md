@@ -4,6 +4,12 @@ Protocol and Operations Kit versions move together: every release bumps `PROTOCO
 `install.sh`, adds an entry here, and is tagged `vX.Y.Z` (the protocol version). Rules: `docs/BIRTH_AND_UPGRADE.md`,
 "Versioning". Update a Being with `<being> update` (shows the entries newer than what it runs, then applies them).
 
+## Unreleased
+
+### Fixed
+- Owner-access and monitor installers now preserve changed local files and stage upstream copies with manifest reports, including pre-manifest installations.
+- Teams verification sends test messages only with explicit `--send`; `--no-send` remains supported for update jobs, and waiting for a reply requires `--send`.
+
 ## [0.5.0] - 2026-11-03 (kit 0.3.0)
 
 Field fixes from Beings running on teammates' boxes, and patterns proven on a Being in daily use.

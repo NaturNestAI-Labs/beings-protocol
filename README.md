@@ -257,7 +257,7 @@ cd ~/beings/<name>
 bin/<name> login being            # the Being signs in (Teams and Outlook), its own session
 bin/<name> login owner            # only if owner access is ticked: the owner signs in, a separate session
 bin/<name> access                 # every login and tool, whose account, what it can do
-bash ops/teams-kit/verify.sh      # who-am-I on each session, units active, test message round trip
+bash ops/teams-kit/verify.sh      # who-am-I on each session and units active; no messages sent
 ```
 
 Optional components, all off by default: `--with owner-access,runner,tunnel,desktop,monitor`.

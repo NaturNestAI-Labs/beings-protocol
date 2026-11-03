@@ -35,10 +35,17 @@ grep -q "New Beings kit version v$pv" <<<"$m" && grep -q 'Bug fixes (' <<<"$m" &
 # 2. Only the offered version can be applied.
 rc=0; run apply 9.9.9 >/dev/null 2>&1 || rc=$?; [[ $rc == 3 ]] && ok "unoffered version refused" || bad "unoffered version: rc $rc"
 
+# Capture verification arguments without running any session or send checks.
+mkdir -p "$W/ops/teams-kit"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" >"%s/verify-args"\n' "$T" >"$W/ops/teams-kit/verify.sh"
+chmod +x "$W/ops/teams-kit/verify.sh"
+
 # 3. A clean update reports success and clears the offer.
 : >"$T/sent.html"; rc=0; run apply "v$pv" >/dev/null 2>&1 || rc=$?
 [[ $rc == 0 ]] && grep -q "Updated to v$pv" "$T/sent.html" && [[ "$(cat "$W/.beings/.protocol-version")" == "$pv" ]] \
   && ok "update applied and reported" || bad "apply ok: rc $rc $(sent)"
+if grep -qx -- '--no-send' "$T/verify-args"; then ok "update verifies without sending"
+else bad "unsafe verification arguments"; fi
 rc=0; run apply "$pv" >/dev/null 2>&1 || rc=$?; [[ $rc == 3 ]] && ok "offer used up after the update" || bad "re-apply: rc $rc"
 
 # 4. A failing update: owner told the problem, report kept, nothing sensitive in it.

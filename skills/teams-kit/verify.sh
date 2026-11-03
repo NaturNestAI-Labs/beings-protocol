@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# verify.sh [--no-send] [--wait-reply <min>]: settings, who-am-I for the four sessions (Being/owner x Teams/Outlook),
+# verify.sh [--send | --no-send] [--wait-reply <min>]: settings, who-am-I for the four sessions (Being/owner x Teams/Outlook),
 # test DM read back, blocker path, units enabled and active, linger. Run in ops/teams-kit; exit 1 on any FAIL.
 set -euo pipefail
 KIT="${BEING_KIT_HOME:-$(cd "$(dirname "$(readlink -f "$0")")" && pwd)}"
-SEND=1 WAIT_MIN=0
+SEND=0 WAIT_MIN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --send) SEND=1; shift ;;
     --no-send) SEND=0; shift ;;
     --wait-reply) WAIT_MIN="${2:?minutes}"; shift 2 ;;
     *) sed -n '2,3p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
   esac
 done
+if [[ ! $WAIT_MIN =~ ^[0-9]+$ ]] || { (( WAIT_MIN > 0 )) && (( ! SEND )); }; then
+  echo "--wait-reply needs --send and nonnegative whole minutes" >&2; exit 2
+fi
 OKS=0 WARNS=0 FAILS=0
 ok() { echo "  ok   $*"; OKS=$((OKS + 1)); }
 warn() { echo "  WARN $*"; WARNS=$((WARNS + 1)); }
@@ -102,7 +106,7 @@ sys.exit(1)' "$log" "$NONCE" "$START"; then got=1; break; fi
     (( got )) && ok "reply detected and logged by the watcher" || bad "no reply seen in $WAIT_MIN min (is the watcher running?)"
   fi
 elif (( SEND )); then echo "[send] skipped: fix the FAILs above first"
-else echo "[send] skipped (--no-send)"; fi
+else echo "[send] skipped (default; use --send for test messages)"; fi
 
 echo "[services]"
 if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then

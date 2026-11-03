@@ -3,6 +3,8 @@
 # every ability off. Never touches an existing owner-access.toml, .env, token cache or browser profile.
 set -euo pipefail
 SRC="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck source=../../scripts/kit-lib.sh
+. "$SRC/../../scripts/kit-lib.sh"
 HOME_DIR=${1:?usage: kit-install.sh <being-home> [being.toml]}
 TOML=${2:-}; [[ $TOML == --name ]] && TOML=""
 [[ -n $TOML ]] || TOML=${BEING_CONFIG_FILE:-}
@@ -12,10 +14,14 @@ KIT=${OWNER_ACCESS_KIT_DIR:-$HOME_DIR/ops/teams-kit}
 FILES=(oa-env.mjs oa-config.mjs sessions.mjs owner-session.mjs guards.mjs ledger.mjs go-approval.mjs mailbox-lib.mjs channel-lib.mjs
   forward-rules.mjs browser-route.mjs owner-browser.mjs owner-web.mjs shared-mailbox-drafts.mjs shared-inbox-monitor.mjs channel-posts.mjs mail-forward-rules.mjs
   owner-access-doctor.mjs verify-upload.py owner-web owner-access-login owner-access-run shared-inbox-monitor.sh)
-for f in "${FILES[@]}"; do install -m "$( [[ -x $SRC/$f ]] && echo 755 || echo 644 )" "$SRC/$f" "$KIT/$f"; done
-install -m 644 "$SRC/README.md" "$KIT/OWNER-ACCESS.md"
-install -m 600 "$SRC/owner-access.toml.example" "$KIT/owner-access.toml.example"
-[[ -e $KIT/shared-inbox-job.md ]] || install -m 644 "$SRC/shared-inbox-job.md.example" "$KIT/shared-inbox-job.md.example"
+kit_copy "$SRC" "$KIT" "${FILES[@]}"
+kit_render "$SRC/README.md" "$KIT/OWNER-ACCESS.md"
+tmp="$(mktemp)"; install -m 600 "$SRC/owner-access.toml.example" "$tmp"
+kit_place "$tmp" "$KIT/owner-access.toml.example"
+if [[ ! -e $KIT/shared-inbox-job.md ]]; then
+  kit_copy "$SRC" "$KIT" shared-inbox-job.md.example
+fi
+kit_summary "owner-access"
 STATE=$KIT/state
 mkdir -p "$STATE/owner-access" "$STATE/sessions"; chmod 700 "$STATE" "$STATE/owner-access" "$STATE/sessions"
 grep -qx 'owner-access.toml' "$KIT/.gitignore" 2>/dev/null || echo 'owner-access.toml' >>"$KIT/.gitignore"
