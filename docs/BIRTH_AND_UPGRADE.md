@@ -57,6 +57,9 @@ curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/inst
   Settings new in `.env.example` are appended to `.env`; existing values are kept.
 - On an upgrade from 0.4.0 there is no manifest yet, so every staged file shows `LOCAL CHANGES`. Diff each one
   against the previously installed kit commit before keeping or replacing it.
+- **Choose `BEING_TEAM_SEND` before Teams goes live.** 0.5.0 adds `BEING_TEAM_SEND=tenant` to the kit settings: teammate
+  chats may then have the Being message internal colleagues and Beings. Set it to `chat` to keep each teammate chat to
+  itself and the owner's 1:1 (0.4.0 behaviour). The guards read it on every send; no restart needed.
 - Rollback: the Being's home is a git repo, so `git status` shows exactly what was added or appended.
 
 Suggested order for a Being that already works with people:

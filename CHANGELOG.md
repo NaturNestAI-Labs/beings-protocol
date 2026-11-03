@@ -39,6 +39,10 @@ Field fixes from Beings running on teammates' boxes, and patterns proven on a Be
   owner's words, docs channel publishing, device sync, monitor keywords, owner-held boxes, usage and host alerts).
 
 ### Changed
+- **Teammate-lane reach (`BEING_TEAM_SEND`, new kit setting):** `tenant` (the default) lets a teammate chat also
+  message internal colleagues and Beings (same tenant, no guests); `chat` keeps it to its own chat and the owner's 1:1,
+  as in 0.4.0. An update adds `BEING_TEAM_SEND=tenant` to the kit settings of an existing Being, so it gains this reach.
+  Owners: choose it explicitly, and set `chat` if teammates should not be able to have the Being DM colleagues.
 - **Blockers** read Stuck / Why / I need from you; the exact error goes to the log only.
 - **Conventions:** one language for all messages, short plain status, verify "sent"/"armed" live, long work becomes a job.
 - **Teammate persona:** SOUL headings match without numbering, symbols or case; if none match, teammate lanes get a
@@ -60,6 +64,10 @@ Field fixes from Beings running on teammates' boxes, and patterns proven on a Be
 - Onboarding test unsets `TMUX`, so its tmux calls never reach a live server.
 - Batch `SEND` arguments quoted in `being-handle`.
 - `being-update` no longer opens a public pull request by default: `BEING_UPDATE_REPORT` defaults to `off`; set `pr` to opt in.
+- Kit tests drop the host's `BEING_*`/`OWNER_*`/`HOOK_*` settings, so run on a Being's box they no longer add jobs to its
+  live job list or call its job hook.
+- A re-run of `install.sh --update` without `claude` on PATH no longer adds `CLAUDE.md`: the kit's own `.claude/skills`
+  link is not taken as Claude Code.
 
 ## [0.4.0] - 2026-10-23 (kit 0.2.0)
 
