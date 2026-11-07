@@ -43,6 +43,15 @@ for l in open(sys.argv[1]):
     "$tid" "$2" >>"$idx" 2>/dev/null || true
 }
 
+started_in() {   # the systemd service this caller runs in (INVOCATION_ID is set inside units), else nothing
+  local cg=${BEING_CGROUP_FILE:-/proc/self/cgroup}   # override for tests
+  [[ -n ${INVOCATION_ID:-} && -r $cg ]] || return 0
+  sed -n 's#.*/\([^/]*\.service\)$#\1#p' "$cg" | tail -1
+}
+note_job() {   # $1 job file, then key value pairs: add them to the record
+  flock "$STATE/jobs.lock" python3 -c 'import json,sys; f=sys.argv[1]; d=json.load(open(f)); a=sys.argv[2:]; d.update(zip(a[::2],a[1::2])); json.dump(d,open(f,"w"),indent=2)' "$@" || true
+}
+
 start_job() {   # $1 kind, $2 name, $3 notify chat, $4 model, $5 network (0|1), rest = payload
   local kind=$1 name=$2 notify=$3 model=$4 net=$5; shift 5
   local id; id="$(date +%m%d-%H%M%S)-$(printf '%s' "$name" | tr -cs 'A-Za-z0-9' '-' | cut -c1-24)"
@@ -61,7 +70,14 @@ json.dump(d,open(f,"w"),indent=2)
 PY
   # The scope and notify chat that count are signed outside the job's own record (scope.mjs job-sign, review #5).
   node "$KIT/scope.mjs" job-sign "$id" "$notify" || { rm -f "$JOBS/$id.json"; echo "could not sign job $id" >&2; exit 2; }
-  setsid "$0" __exec "$id" </dev/null >/dev/null 2>"$JOBS/$id.exec.log" &
+  # Started from a systemd unit (a routine timer): run in a scope of its own, or the unit's end kills the job with it.
+  local own=() unit; unit=$(started_in)
+  if [[ -n $unit && ${BEING_JOB_OWN_SCOPE:-on} != off ]] && command -v systemd-run >/dev/null \
+     && systemd-run --user --scope --quiet --collect true >/dev/null 2>&1; then
+    own=(systemd-run --user --scope --quiet --collect --unit "$(printf '%s' "$BEING_NAME-job-$id" | tr -c 'A-Za-z0-9_.-' '-')")
+  fi
+  [[ -n $unit ]] && note_job "$JOBS/$id.json" started_in "$unit" own_scope "$([[ ${#own[@]} -gt 0 ]] && echo yes || echo no)"
+  ${own[@]+"${own[@]}"} setsid "$0" __exec "$id" </dev/null >/dev/null 2>"$JOBS/$id.exec.log" &
   echo "$id"
 }
 
@@ -150,6 +166,8 @@ case "${1:-list}" in
         flock "$STATE/jobs.lock" python3 -c 'import json,sys,datetime; f=sys.argv[1]; d=json.load(open(f)); d.update(status="refused-team-sync",exit=3,finished=datetime.datetime.now().astimezone().isoformat()); json.dump(d,open(f,"w"),indent=2)' "$jf" || true; exit 3; }; }
     fi
     trap - ERR; set +e
+    # A kill from outside (unit stop, logout, kill) is recorded with its signal and still wakes the owner lane.
+    killed=""; for sig in TERM HUP INT; do trap "killed=$sig; [[ -n \${cpid:-} ]] && kill -$sig \$cpid 2>/dev/null" "$sig"; done
     if [[ $kind == agent ]]; then
       # The soul, always (soul.py): the full SOUL.md for an owner-lane job or heartbeat, the public soul for a teammate's job.
       sargs=(); soulf=$(python3 "$KIT/soul.py" file "$BEING_LANE" 2>>"$log") && [[ -s $soulf ]] && sargs=(--append-system-prompt-file "$soulf") \
@@ -166,7 +184,7 @@ ${payload[*]}" </dev/null) >"$log" 2>&1 &
       cpid=$!
       python3 "$KIT/being-sessions" register --name "$sname" --lane "$BEING_LANE" --kind "$skind" --pid "$cpid" \
         --sid "$(json_get "$jf" session_id)" --perm "$perm" --job "$id" 2>>"$log" || true
-      wait "$cpid"
+      wait "$cpid"; wrc=$?; [[ -n $killed ]] && wait "$cpid" 2>/dev/null; (exit $wrc)   # a trapped signal ends wait early
     elif [[ $kind == codex ]]; then
       extra=(); IFS=: read -ra dirs <<<"$(json_get "$jf" add_dirs)"
       for d in "${dirs[@]}"; do [[ -n $d ]] && extra+=(--add-dir "$d"); done
@@ -183,12 +201,13 @@ ${payload[*]}" </dev/null) >"$JOBS/$id.events.jsonl" 2>"$log"
       (cd "$WORKSPACE" && "${launch[@]}" ${launch:+--} "${payload[@]}") >"$log" 2>&1
     fi
     rc=$?; set -e
+    [[ -n $killed ]] && echo "being-job: job $id got SIG$killed from outside (exit $rc)" >&2
     printf '%s' "$BEING_SEND_TOKEN" | node "$KIT/scope.mjs" revoke; unset BEING_SEND_TOKEN; rm -f "$JOBS/$id.grant"
     # Ended: live notes the job never read are recorded in its job file, for the result handler below.
     [[ $kind == agent ]] && { python3 "$KIT/being-sessions" end --name "$sname" --pid "$cpid" \
       --transcript "$( if [[ ${#launch[@]} -eq 0 ]]; then echo "$CLAUDE_DIR/$(json_get "$jf" session_id).jsonl"; else "$KIT/being-launch" transcript "$BEING_LANE" "$(json_get "$jf" session_id)" 2>/dev/null || echo /nonexistent; fi )" >>"$log" 2>&1 || true; }
     # Verify: a model job that exits 0 without a result file is not "done".
-    status="done"; (( rc != 0 )) && status="failed"
+    status="done"; (( rc != 0 )) && status="failed"; [[ -n $killed ]] && status=killed
     [[ $kind != run && $status == "done" && ! -s "$result" ]] && status=no-result
     # Claude at its usage limit: an owner-lane agent job continues as a Codex job with the same task (BEING_WORK_FALLBACK).
     # Teammate lanes never fall back: their fence is a Claude hook that Codex does not run.
@@ -208,11 +227,12 @@ for p in json.load(open(sys.argv[1]))["payload"]: sys.stdout.write(p+"\0")' "$jf
         echo "claude usage limit: no codex fallback ($([[ $BEING_LANE == owner ]] && echo 'already a fallback' || echo 'teammate lane: the fence is Claude-only'))" >>"$log"
       fi
     fi
-    flock "$STATE/jobs.lock" python3 - "$jf" "$rc" "$status" "${next_id:-}" <<'PY'
+    flock "$STATE/jobs.lock" python3 - "$jf" "$rc" "$status" "${next_id:-}" "$killed" <<'PY'
 import json,sys,datetime
-f,rc,st,nxt=sys.argv[1],int(sys.argv[2]),sys.argv[3],sys.argv[4]; d=json.load(open(f))
+f,rc,st,nxt,sig=sys.argv[1],int(sys.argv[2]),sys.argv[3],sys.argv[4],sys.argv[5]; d=json.load(open(f))
 if d.get("status")=="stopped": sys.exit(0)   # an intentional stop keeps its own record
 d.update(status=st, exit=rc, finished=datetime.datetime.now().astimezone().isoformat())
+if sig: d["reason"]=f"SIG{sig} from outside the job"+(f" (started in {d['started_in']})" if d.get("started_in") else "")
 if nxt: d["fallback_job"]=nxt
 json.dump(d,open(f,"w"),indent=2)
 PY

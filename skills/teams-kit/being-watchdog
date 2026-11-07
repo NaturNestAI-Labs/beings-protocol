@@ -84,6 +84,29 @@ def stalled(what, since, action=""):
             + (f"<p>Last action: <code>{esc(action)}</code></p>" if action else "")
             + "<p>It may be waiting on a prompt or a connection. Reply here if you want it stopped or restarted.</p>")
 
+def death_reason(d):
+    """Why a job's process may be gone: its own stderr if it wrote any, else what the empty logs imply."""
+    jobs = os.path.join(STATE, "jobs")
+    for f in (d["id"] + ".exec.log", d["id"] + ".log"):
+        try: tail = [l.strip() for l in open(os.path.join(jobs, f), errors="replace").read().splitlines() if l.strip()][-1:]
+        except OSError: tail = []
+        if tail: return f"last line of {f}: {tail[0][:200]}"
+    unit = d.get("started_in")
+    if unit and d.get("own_scope") != "yes":
+        return (f"killed without a word (empty logs); started from {unit}: when that unit ends, systemd stops what is "
+                "left in it unless the unit has KillMode=process")
+    return "killed without a word (empty logs): SIGKILL, out of memory, reboot, or the unit that started it was stopped"
+
+def died(d, why):
+    """Blocker (logged in blockers.jsonl, owner told) for a vanished job; a plain alert if the blocker cannot run."""
+    if "job:" + d["id"] in seen: return
+    r = subprocess.run([os.path.join(KIT, "being-blocker"), f"Job {d['name']} stopped unexpectedly (marked died)",
+                        f"Its process is gone and it recorded no exit. {why}.", f"Check being-job log {d['id']} and re-run it if still needed."],
+                       capture_output=True, text=True) if os.access(os.path.join(KIT, "being-blocker"), os.X_OK) else None
+    if r is not None and r.returncode == 0: seen["job:" + d["id"]] = datetime.now().isoformat(); return
+    alert("job:" + d["id"], f"<p>Job “{d['name']}” stopped unexpectedly (its process is gone). Marked as died: "
+          f"{why.replace('&', '&amp;').replace('<', '&lt;')}. Log: <code>being-job log {d['id']}</code>.</p>")
+
 now = time.time()
 procs = proc_table()
 cpu_seen = seen.setdefault("_cpu", {})
@@ -103,11 +126,11 @@ for jf in glob.glob(os.path.join(STATE, "jobs", "*.json")):
     if cpu is not None and (prev is None or cpu != prev[0]): prev = [cpu, now]
     if prev: cpu_seen[d["id"]] = prev; t = max(t, prev[1])
     if cpu is None and now - started > 120:
-        # Process gone (kill, reboot, session limit): fix the record and say so once.
-        d.update(status="died", exit=-1, finished=datetime.now().astimezone().isoformat())
+        # Process gone (kill, reboot, session limit): fix the record with what is known, and raise a blocker once.
+        why = death_reason(d)
+        d.update(status="died", exit=-1, reason=why, finished=datetime.now().astimezone().isoformat())
         json.dump(d, open(jf, "w"), indent=2)
-        alert("job:" + d["id"], f"<p>Job “{d['name']}” stopped unexpectedly (its process is gone). Marked as died; "
-              f"log: <code>being-job log {d['id']}</code>.</p>")
+        died(d, why)
     elif queued(procs, tree):
         continue   # waiting its turn behind other jobs
     elif now - t > STALL_MIN * 60:

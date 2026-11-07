@@ -21,6 +21,7 @@ if (prompt.includes('TAMPER') && res) {
   const jf = res.replace(/\\.result\\.md$/, '.json'); const d = JSON.parse(fs.readFileSync(jf, 'utf8'));
   d.scope = 'full'; d.notify = '19:owner-chat'; fs.writeFileSync(jf, JSON.stringify(d));
 }
+if (prompt.includes('SLOW')) { fs.writeFileSync(process.env.HOME + '/claude.started', ''); setInterval(() => {}, 1000); return; }
 if (prompt.includes('LIMIT')) { console.log("You've hit your usage limit · resets 5pm"); process.exit(1); }
 if (res) fs.writeFileSync(res, 'done');
 `;
@@ -50,7 +51,7 @@ function kit(t) {
   const work = () => (existsSync(path.join(st, 'work.jsonl')) ? readFileSync(path.join(st, 'work.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
   const until = async (f, ms = 15000) => { for (let i = 0; i < ms / 100 && !f(); i++) await sleep(100); return f(); };
   const rec = (id) => JSON.parse(readFileSync(path.join(st, 'jobs', id + '.json'), 'utf8'));
-  return { dir, k, st, env, job, work, until, rec };
+  return { dir, k, st, bin, env, mint, job, work, until, rec };
 }
 
 test('#4: being-job run and codex --network are refused without the full scope; allowed with it', async (t) => {
@@ -203,4 +204,51 @@ test('stop: marks the job stopped first, kills its process group, revokes its gr
   assert.ok(!existsSync(path.join(st, 'grants', grant + '.json')), 'grant revoked');
   await sleep(500); assert.equal(work().length, 0);
   assert.match(spawnSync(path.join(k, 'being-job'), ['stop', id], { env, encoding: 'utf8' }).stdout, /not running: stopped/);
+});
+
+test('a job killed from outside is recorded as killed with its signal, and still wakes the owner lane', async (t) => {
+  const { dir, st, job, work, until, rec } = kit(t);
+  const id = job('full', ['agent', 'slow', '--notify', '19:owner-chat', 'SLOW task']).stdout.trim();
+  assert.ok(await until(() => existsSync(path.join(dir, 'home', 'claude.started'))), 'fake claude started');
+  const pid = spawnSync('pgrep', ['-f', `being-job __exec ${id}$`], { encoding: 'utf8' }).stdout.trim().split('\n')[0];
+  assert.ok(pid, 'exec process found');
+  process.kill(Number(pid), 'SIGTERM');
+  assert.ok(await until(() => rec(id).status !== 'running'), 'record settled');
+  assert.equal(rec(id).status, 'killed'); assert.equal(rec(id).exit, 143); assert.match(rec(id).reason, /SIGTERM from outside/);
+  assert.match(readFileSync(path.join(st, 'jobs', id + '.exec.log'), 'utf8'), /got SIGTERM from outside/);
+  assert.ok(await until(() => work().some((e) => e.jobId === id && e.status === 'killed')), 'owner lane woken');
+});
+
+// Stub systemd-run: records its arguments, drops its options and runs the command (as a scope does).
+const SDRUN = `#!/bin/sh
+echo "$*" >> "$HOME/sdrun.calls"
+while [ $# -gt 0 ]; do case $1 in --unit) shift 2 ;; --*) shift ;; *) break ;; esac; done
+exec "$@"
+`;
+function unitJob(t, extra) {
+  const x = kit(t);
+  writeFileSync(path.join(x.bin, 'systemd-run'), SDRUN); chmodSync(path.join(x.bin, 'systemd-run'), 0o755);
+  const cg = path.join(x.dir, 'cgroup');
+  writeFileSync(cg, '0::/user.slice/user-1000.slice/user@1000.service/app.slice/testbeing-routine@brief.service\n');
+  const env = { ...x.env, BEING_SEND_TOKEN: x.mint('full'), BEING_CGROUP_FILE: cg, ...extra };
+  const r = spawnSync(path.join(x.k, 'being-job'), ['agent', 'routine-brief', '--notify', '19:owner-chat', 'brief'], { env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const calls = () => (existsSync(path.join(x.dir, 'home', 'sdrun.calls')) ? readFileSync(path.join(x.dir, 'home', 'sdrun.calls'), 'utf8') : '');
+  return { ...x, id: r.stdout.trim(), calls };
+}
+
+test('a job started from a systemd unit runs in a scope of its own, so the unit ending does not kill it', async (t) => {
+  const { id, rec, work, until, calls } = unitJob(t, { INVOCATION_ID: 'abc123' });
+  assert.equal(rec(id).started_in, 'testbeing-routine@brief.service'); assert.equal(rec(id).own_scope, 'yes');
+  assert.ok(await until(() => work().some((e) => e.jobId === id))); assert.equal(rec(id).status, 'done');
+  assert.match(calls(), new RegExp(`--user --scope --quiet --collect --unit Testbeing-job-${id} setsid .*being-job __exec ${id}`));
+});
+
+test('own scope: off by BEING_JOB_OWN_SCOPE=off (recorded), and never outside a unit', async (t) => {
+  const off = unitJob(t, { INVOCATION_ID: 'abc123', BEING_JOB_OWN_SCOPE: 'off' });
+  assert.equal(off.rec(off.id).own_scope, 'no'); assert.equal(off.calls(), '');
+  assert.ok(await off.until(() => off.work().length === 1)); assert.equal(off.rec(off.id).status, 'done');
+  const plain = unitJob(t, {});
+  assert.equal(plain.rec(plain.id).started_in, undefined); assert.equal(plain.calls(), '');
+  assert.ok(await plain.until(() => plain.work().length === 1));
 });

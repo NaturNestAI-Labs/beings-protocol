@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +16,7 @@ function kit(t) {
   const k = path.join(dir, 'kit'), st = path.join(dir, 'state'), ws = path.join(dir, 'ws'), home = path.join(dir, 'home');
   for (const d of [k, path.join(st, 'jobs'), ws, home]) mkdirSync(d, { recursive: true });
   copyFileSync(path.join(KIT, 'being-watchdog'), path.join(k, 'being-watchdog'));
+  copyFileSync(path.join(KIT, 'being-blocker'), path.join(k, 'being-blocker')); chmodSync(path.join(k, 'being-blocker'), 0o755);
   writeFileSync(path.join(k, 'teams-send-dm.mjs'),
     `import fs from 'fs'; fs.appendFileSync(${JSON.stringify(path.join(dir, 'alerts.txt'))}, fs.readFileSync(0, 'utf8') + '\\n---\\n');\n`);
   writeFileSync(path.join(k, '.env'), `BEING_NAME=testbeing\nBEING_STATE_DIR=${st}\nBEING_WORKSPACE=${ws}\nBEING_STALL_MIN=0\n`);
@@ -62,12 +63,32 @@ test('a stalled job gets one alert with the last tool action, from the session a
   assert.match(a, /Last action: <code>Bash: make &lt;deploy&gt;<\/code>/);
 });
 
-test('a job whose process is gone is marked died', async (t) => {
+const gone = (st, id, o = {}) => writeFileSync(path.join(st, 'jobs', id + '.json'), JSON.stringify({ id, kind: 'run', name: id,
+  status: 'running', started: new Date(Date.now() - 3600e3).toISOString(), ...o }));
+const recOf = (st, id) => JSON.parse(readFileSync(path.join(st, 'jobs', id + '.json'), 'utf8'));
+const blockers = (st) => (existsSync(path.join(st, 'blockers.jsonl'))
+  ? readFileSync(path.join(st, 'blockers.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+
+test('a job whose process is gone is marked died, with a reason, and raises one blocker', async (t) => {
   const { st, run, alerts } = kit(t);
   const id = '0101-000000-vanished';
-  writeFileSync(path.join(st, 'jobs', id + '.json'), JSON.stringify({ id, kind: 'run', name: id, status: 'running',
-    started: new Date(Date.now() - 3600e3).toISOString() }));
+  gone(st, id);
+  run(); run();
+  assert.equal(recOf(st, id).status, 'died'); assert.equal(recOf(st, id).exit, -1);
+  assert.match(recOf(st, id).reason, /empty logs/);
+  const b = blockers(st);
+  assert.equal(b.length, 1, JSON.stringify(b)); assert.match(b[0].task, /stopped unexpectedly/); assert.match(b[0].need, new RegExp(id));
+  assert.match(alerts(), /Stuck: Job .*stopped unexpectedly/);
+  assert.equal(alerts().split('---').filter((x) => x.trim()).length, 1);
+});
+
+test('died: a job started from a unit without its own scope names the unit and KillMode; its own stderr wins', async (t) => {
+  const { st, run } = kit(t);
+  gone(st, '0101-000000-unit', { started_in: 'nova-routine@brief.service', own_scope: 'no' });
+  gone(st, '0101-000000-said', { started_in: 'x.service', own_scope: 'no' });
+  writeFileSync(path.join(st, 'jobs', '0101-000000-said.exec.log'), 'node: out of memory\n');
   run();
-  assert.equal(JSON.parse(readFileSync(path.join(st, 'jobs', id + '.json'), 'utf8')).status, 'died');
-  assert.match(alerts(), /stopped unexpectedly/);
+  assert.match(recOf(st, '0101-000000-unit').reason, /nova-routine@brief\.service.*KillMode=process/);
+  assert.match(recOf(st, '0101-000000-said').reason, /exec\.log: node: out of memory/);
+  assert.equal(blockers(st).length, 2);
 });
