@@ -97,10 +97,11 @@ def death_reason(d):
                 "left in it unless the unit has KillMode=process")
     return "killed without a word (empty logs): SIGKILL, out of memory, reboot, or the unit that started it was stopped"
 
-def died(d, why):
-    """Blocker (logged in blockers.jsonl, owner told) for a vanished job; a plain alert if the blocker cannot run."""
+def died(d, why, retry=False):
+    """Blocker (logged in blockers.jsonl, owner told) for a vanished job; a plain alert if the blocker cannot run.
+    A retry sends only the plain alert: the blocker line is already logged."""
     if "job:" + d["id"] in seen: return
-    r = subprocess.run([os.path.join(KIT, "being-blocker"), f"Job {d['name']} stopped unexpectedly (marked died)",
+    r = None if retry else subprocess.run([os.path.join(KIT, "being-blocker"), f"Job {d['name']} stopped unexpectedly (marked died)",
                         f"Its process is gone and it recorded no exit. {why}.", f"Check being-job log {d['id']} and re-run it if still needed."],
                        capture_output=True, text=True) if os.access(os.path.join(KIT, "being-blocker"), os.X_OK) else None
     if r is not None and r.returncode == 0: seen["job:" + d["id"]] = datetime.now().isoformat(); return
@@ -112,6 +113,9 @@ procs = proc_table()
 cpu_seen = seen.setdefault("_cpu", {})
 for jf in glob.glob(os.path.join(STATE, "jobs", "*.json")):
     d = json.load(open(jf))
+    if d.get("status") == "died" and d.get("reason") and "job:" + d["id"] not in seen \
+            and now - datetime.fromisoformat(d.get("finished") or d["started"]).timestamp() < 86400:
+        died(d, d["reason"], retry=True); continue   # its alert did not go out last time: retry for a day
     if d.get("status") != "running": continue
     files = claude_files(d["session_id"]) if d["kind"] == "agent" and d.get("session_id") else \
         [os.path.join(STATE, "jobs", d["id"] + (".events.jsonl" if d["kind"] == "codex" else ".log"))]

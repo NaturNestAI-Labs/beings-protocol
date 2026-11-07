@@ -18,7 +18,8 @@ function kit(t) {
   copyFileSync(path.join(KIT, 'being-watchdog'), path.join(k, 'being-watchdog'));
   copyFileSync(path.join(KIT, 'being-blocker'), path.join(k, 'being-blocker')); chmodSync(path.join(k, 'being-blocker'), 0o755);
   writeFileSync(path.join(k, 'teams-send-dm.mjs'),
-    `import fs from 'fs'; fs.appendFileSync(${JSON.stringify(path.join(dir, 'alerts.txt'))}, fs.readFileSync(0, 'utf8') + '\\n---\\n');\n`);
+    `import fs from 'fs'; if (fs.existsSync(${JSON.stringify(path.join(dir, 'fail'))})) process.exit(1);\n`
+    + `fs.appendFileSync(${JSON.stringify(path.join(dir, 'alerts.txt'))}, fs.readFileSync(0, 'utf8') + '\\n---\\n');\n`);
   writeFileSync(path.join(k, '.env'), `BEING_NAME=testbeing\nBEING_STATE_DIR=${st}\nBEING_WORKSPACE=${ws}\nBEING_STALL_MIN=0\n`);
   const procs = [];
   t.after(() => { for (const p of procs) { try { process.kill(-p.pid, 'SIGKILL'); } catch { /* gone */ } } rmSync(dir, { recursive: true, force: true }); });
@@ -34,7 +35,7 @@ function kit(t) {
   };
   const run = () => spawnSync('python3', [path.join(k, 'being-watchdog')], { env, encoding: 'utf8' });
   const alerts = () => (existsSync(path.join(dir, 'alerts.txt')) ? readFileSync(path.join(dir, 'alerts.txt'), 'utf8') : '');
-  return { st, claudeDir, job, run, alerts };
+  return { dir, st, claudeDir, job, run, alerts };
 }
 
 test('a job that only sleeps in a wait loop is queued, not stuck: no alert', async (t) => {
@@ -91,4 +92,18 @@ test('died: a job started from a unit without its own scope names the unit and K
   assert.match(recOf(st, '0101-000000-unit').reason, /nova-routine@brief\.service.*KillMode=process/);
   assert.match(recOf(st, '0101-000000-said').reason, /exec\.log: node: out of memory/);
   assert.equal(blockers(st).length, 2);
+});
+
+test('died: when the owner alert cannot be sent, the next check retries it once, with no second blocker line', async (t) => {
+  const { dir, st, run, alerts } = kit(t);
+  const id = '0101-000000-unsent';
+  gone(st, id);
+  writeFileSync(path.join(dir, 'fail'), '');
+  run();
+  assert.equal(recOf(st, id).status, 'died'); assert.equal(alerts(), '');
+  rmSync(path.join(dir, 'fail'));
+  run(); run();
+  assert.equal(alerts().split('---').filter((x) => x.trim()).length, 1, alerts());
+  assert.match(alerts(), new RegExp(`stopped unexpectedly.*${id}`, 's'));
+  assert.equal(blockers(st).length, 1);
 });
