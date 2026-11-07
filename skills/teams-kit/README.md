@@ -277,6 +277,10 @@ Details moved out of the script headers, so comments stay short.
 - **being-watchdog.** A job whose process tree only waits (sleep or flock in a shell loop, e.g. queued behind other jobs) is
   not alerted on. Alerts name the last tool action from the transcript; a run job that resumes a Claude session
   (`--resume <id>` in its command) is followed through that session's transcript.
+  A job whose process is gone is marked `died` (exit -1) with a `reason` and goes through being-blocker.
+- **being-job and systemd.** A job started inside a unit (a routine's oneshot) runs in a transient scope of its own, so
+  the unit ending does not kill it; the record notes `started_in` and `own_scope`. `BEING_JOB_OWN_SCOPE=off` opts out.
+  A signal from outside ends the job as `killed` (exit, `reason`, a line in its exec log); the owner lane is still woken.
 - **being-teams at boot.** `autostart on` also enables linger (`loginctl enable-linger`; a warning if that is not allowed),
   so the unit starts without a login; `autostart status` shows it. The unit waits up to `BEING_START_WAIT_SEC` (120) for the
   kit path, for a kit on a disk that mounts late. The loop waits up to `BEING_NTP_WAIT_SEC` (300) for NTP when the clock is
