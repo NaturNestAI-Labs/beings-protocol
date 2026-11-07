@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { hostEnv } from './test-env.mjs';
 const KIT = path.dirname(fileURLToPath(import.meta.url));
 
 function kit(t) {
@@ -21,7 +22,7 @@ function kit(t) {
   writeFileSync(path.join(k, 'teams-send-dm.mjs'), `import { readFileSync, appendFileSync } from 'node:fs';
 appendFileSync(${JSON.stringify(path.join(dir, 'sent.log'))}, readFileSync(0, 'utf8') + '\\n');`);
   const run = (...a) => spawnSync('python3', [path.join(k, 'being-retry'), ...a], {
-    encoding: 'utf8', env: { ...process.env, BEING_STATE_DIR: st, BEING_RETRY_BACKOFF_SEC: '0', BEING_RETRY_DISPATCH: '0' } });
+    encoding: 'utf8', env: { ...hostEnv(), BEING_STATE_DIR: st, BEING_RETRY_BACKOFF_SEC: '0', BEING_RETRY_DISPATCH: '0' } });
   const lines = (f) => (existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
   const sent = () => (existsSync(path.join(dir, 'sent.log')) ? readFileSync(path.join(dir, 'sent.log'), 'utf8').split('\n').filter(Boolean) : []);
   return { st, run, lines, sent };
@@ -70,7 +71,7 @@ test('backoff: a fresh failure waits before its retry', (t) => {
   const { st, lines } = kit(t);
   writeFileSync(path.join(st, 'failed.jsonl'), JSON.stringify(msg('m2')) + '\n');
   const r = spawnSync('python3', [path.join(path.dirname(st), 'kit', 'being-retry'), 'run'], { encoding: 'utf8',
-    env: { ...process.env, BEING_STATE_DIR: st, BEING_RETRY_BACKOFF_SEC: '120,600', BEING_RETRY_DISPATCH: '0' } });
+    env: { ...hostEnv(), BEING_STATE_DIR: st, BEING_RETRY_BACKOFF_SEC: '120,600', BEING_RETRY_DISPATCH: '0' } });
   assert.equal(r.status, 0);
   assert.equal(lines(path.join(st, 'work.jsonl')).length, 0);
   const p = JSON.parse(readFileSync(path.join(st, 'retry.json'), 'utf8'));
@@ -110,13 +111,13 @@ test('answered while waiting for its backoff: settled when it comes due, not re-
   const { st, lines } = kit(t);
   writeFileSync(path.join(st, 'failed.jsonl'), JSON.stringify(msg('m5')) + '\n');
   const r1 = spawnSync('python3', [path.join(path.dirname(st), 'kit', 'being-retry'), 'run'], { encoding: 'utf8',
-    env: { ...process.env, BEING_STATE_DIR: st, BEING_RETRY_BACKOFF_SEC: '1', BEING_RETRY_DISPATCH: '0' } });
+    env: { ...hostEnv(), BEING_STATE_DIR: st, BEING_RETRY_BACKOFF_SEC: '1', BEING_RETRY_DISPATCH: '0' } });
   assert.equal(r1.status, 0);
   mkdirSync(path.join(st, 'conversations'), { recursive: true });
   writeFileSync(path.join(st, 'conversations', '19_abc.jsonl'), JSON.stringify({ dir: 'out', kind: 'message', chatId: '19:abc', messageId: 'r5', replyTo: 'm5' }) + '\n');
   spawnSync('sleep', ['1.2']);
   spawnSync('python3', [path.join(path.dirname(st), 'kit', 'being-retry'), 'run'], { encoding: 'utf8',
-    env: { ...process.env, BEING_STATE_DIR: st, BEING_RETRY_BACKOFF_SEC: '1', BEING_RETRY_DISPATCH: '0' } });
+    env: { ...hostEnv(), BEING_STATE_DIR: st, BEING_RETRY_BACKOFF_SEC: '1', BEING_RETRY_DISPATCH: '0' } });
   assert.equal(lines(path.join(st, 'work.jsonl')).length, 0);
   assert.equal(JSON.parse(readFileSync(path.join(st, 'retry.json'), 'utf8')).m5, undefined);
   assert.equal(lines(path.join(st, 'failed-handled.jsonl'))[0].answeredBy, 'r5');

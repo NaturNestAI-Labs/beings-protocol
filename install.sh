@@ -1041,7 +1041,8 @@ TEAMS_KIT_FILES=(
   routines.conf.example scope.mjs scope.test.mjs secrets.mjs secrets.test.mjs send-as.mjs send-as.test.mjs
   senders-offline.test.mjs soul.py soul.test.mjs strip.mjs systemd/being-deadman.service.example
   systemd/being-deadman.timer.example systemd/being-routine@.service.example systemd/being-teams.service.example
-  team-fence.test.mjs team-scope.mjs team-scope.test.mjs teams-channel.test.mjs triage-jobs.test.mjs voice-schema.json webhook/README.md
+  team-fence.test.mjs team-scope.mjs team-scope.test.mjs teams-channel.test.mjs test-env.mjs test-env.test.mjs triage-jobs.test.mjs
+  voice-schema.json webhook/README.md
   webhook/env.example webhook/graph-webhook.test.mjs webhook/units/graph-lifecycle.path
   webhook/units/graph-subscribe-renew.service webhook/units/graph-subscribe.service webhook/units/graph-subscribe.timer
   webhook/units/graph-webhook.service workbook-sync.test.mjs

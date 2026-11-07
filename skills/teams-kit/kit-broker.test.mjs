@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findSecretsInFiles } from './secrets.mjs';
 
+import { hostEnv } from './test-env.mjs';
 const KIT = path.dirname(fileURLToPath(import.meta.url));
 // Stand-in for mail.mjs / draft-for-owner.mjs: prints each argument, and for a file value its content (or MISSING).
 const ECHO = `import { existsSync, readFileSync } from 'node:fs';
@@ -29,7 +30,7 @@ async function broker(t) {
   for (const f of ['mail.mjs', 'draft-for-owner.mjs']) writeFileSync(path.join(k, f), ECHO);
   writeFileSync(path.join(host, 'a.txt'), 'AAA'); writeFileSync(path.join(host, 'b.txt'), 'BBB'); writeFileSync(path.join(host, 'logo.png'), 'PNG');
   const sock = path.join(st, 'b.sock');
-  const env = { ...process.env, BEING_STATE_DIR: st };
+  const env = { ...hostEnv(), BEING_STATE_DIR: st };
   const b = spawn('python3', [path.join(k, 'kit-broker'), 'serve', '--socket', sock, '--class', 'ai', '--peer-uid', String(process.getuid())],
     { env, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(() => b.kill());

@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { hostEnv } from './test-env.mjs';
 const KIT = path.dirname(fileURLToPath(import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const HAVE_BWRAP = spawnSync('bwrap', ['--ro-bind', '/', '/', 'true']).status === 0;
@@ -111,7 +112,7 @@ const body = readFileSync(0, 'utf8');   // blocks until stdin EOF, like the real
 process.stdout.write('sent ' + process.argv.slice(2).join(' ') + ' :: ' + body.trim() + '\\n');\n`);
   const { spawn } = await import('node:child_process');
   const sock = path.join(st, 'b-test.sock');
-  const env = { ...process.env, BEING_KIT_HOME: k, BEING_STATE_DIR: st };
+  const env = { ...hostEnv(), BEING_KIT_HOME: k, BEING_STATE_DIR: st };
   for (const key of Object.keys(env)) if (/^(OWNER_|M365_)/.test(key)) delete env[key];
   const broker = spawn('python3', [path.join(k, 'kit-broker'), 'serve', '--socket', sock, '--class', 'team', '--peer-uid', String(process.getuid()),
     '--chat', '19:eof-test@thread.v2'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -136,7 +137,7 @@ const a = process.argv.slice(2), out = a[a.indexOf('--out') + 1]; mkdirSync(out,
 const file = out + '/1-image.png'; writeFileSync(file, 'PNGDATA'); console.log(JSON.stringify({ file, bytes: 7 }));\n`);
   const { spawn } = await import('node:child_process');
   const sock = path.join(st, 'b-att.sock');
-  const env = { ...process.env, BEING_KIT_HOME: k, BEING_STATE_DIR: st };
+  const env = { ...hostEnv(), BEING_KIT_HOME: k, BEING_STATE_DIR: st };
   for (const key of Object.keys(env)) if (/^(OWNER_|M365_)/.test(key)) delete env[key];
   const broker = spawn('python3', [path.join(k, 'kit-broker'), 'serve', '--socket', sock, '--class', 'team', '--peer-uid', String(process.getuid()),
     '--chat', '19:att-test@thread.v2'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -192,7 +193,7 @@ console.log(JSON.stringify({ model, host, ifs, base: b, cred: !!process.env.BEIN
 test('BEING_SANDBOX_NET accepts only none|host: a typo stops the launch instead of using the host network', (t) => {
   const { k, st, ws } = kit(t);
   const run = (net) => spawnSync(path.join(k, 'being-launch'), ['team:19:x', '--', 'true'], { encoding: 'utf8',
-    env: { ...process.env, BEING_KIT_HOME: k, BEING_STATE_DIR: st, BEING_WORKSPACE: ws, BEING_ISOLATION: 'bwrap',
+    env: { ...hostEnv(), BEING_KIT_HOME: k, BEING_STATE_DIR: st, BEING_WORKSPACE: ws, BEING_ISOLATION: 'bwrap',
       BEING_ISOLATION_LANES: 'team', BEING_LAUNCH_DRY: '1', BEING_SANDBOX_NET: net } });
   const r = run('hots');
   assert.equal(r.status, 5, r.stderr); assert.match(r.stderr, /BEING_SANDBOX_NET=hots \(none\|host\)/);
@@ -203,7 +204,7 @@ test('bwrap: a node installed outside /usr is bound into the sandbox at /run/bin
   const fakeNode = path.join(dir, 'opt-node', 'bin', 'node');
   mkdirSync(path.dirname(fakeNode), { recursive: true }); writeFileSync(fakeNode, '#!/bin/sh\n'); chmodSync(fakeNode, 0o755);
   const dry = (nodeBin) => spawnSync(path.join(k, 'being-launch'), ['job', '--', 'true'], { encoding: 'utf8',
-    env: { ...process.env, PATH: `${path.join(dir, 'cc', 'bin')}:${process.env.PATH}`, BEING_KIT_HOME: k, BEING_STATE_DIR: st, BEING_WORKSPACE: ws,
+    env: { ...hostEnv(), PATH: `${path.join(dir, 'cc', 'bin')}:${process.env.PATH}`, BEING_KIT_HOME: k, BEING_STATE_DIR: st, BEING_WORKSPACE: ws,
       BEING_NAME: 'Testbeing', BEING_ISOLATION: 'bwrap', BEING_ISOLATION_LANES: 'all', BEING_LAUNCH_DRY: '1', BEING_NODE_BIN: nodeBin } });
   const outside = dry(fakeNode);
   assert.equal(outside.status, 0, outside.stderr);

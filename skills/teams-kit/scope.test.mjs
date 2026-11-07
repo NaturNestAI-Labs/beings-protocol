@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { signJob, jobScope, mintGrant, revokeGrant, currentScope, allowedChats, pruneGrants, handlerKey, keyFile } from './scope.mjs';
 
+import { hostEnv } from './test-env.mjs';
 const state = () => mkdtempSync(path.join(tmpdir(), 'scope-'));
 
 test('no token is owner-only; an unknown or revoked token is none (refused), never the owner', () => {
@@ -47,7 +48,7 @@ const kit = (s) => {
   for (const f of ['scope.mjs', 'kit-env.mjs']) copyFileSync(f, path.join(d, f));
   writeFileSync(path.join(d, '.env'), `BEING_STATE_DIR='${s}'\n`);
   return (args, env = {}, input) => spawnSync('node', [path.join(d, 'scope.mjs'), ...args],
-    { env: { ...process.env, BEING_SEND_TOKEN: '', ...env }, encoding: 'utf8', input });
+    { env: { ...hostEnv(), BEING_SEND_TOKEN: '', ...env }, encoding: 'utf8', input });
 };
 
 test('BEING_SEND_SCOPE and BEING_STATE_DIR in the environment are ignored', () => {
@@ -106,7 +107,7 @@ test('routine scope: owner reads allowed, sends limited to its chats, signed job
 function routineEnv() {   // a throwaway routines.conf; the real one (gitignored) holds the Being's own chat ids
   const d = mkdtempSync(path.join(tmpdir(), 'routine-')), conf = path.join(d, 'routines.conf');
   writeFileSync(conf, 'brief owner\nteamreport 19:leads@thread.v2\n');
-  return { ...process.env, BEING_ROUTINES_FILE: conf, OWNER_DM_CHAT: '19:owner_being@unq.gbl.spaces', BEING_STATE_DIR: d };
+  return { ...hostEnv(), BEING_ROUTINES_FILE: conf, OWNER_DM_CHAT: '19:owner_being@unq.gbl.spaces', BEING_STATE_DIR: d };
 }
 
 test('being-routine --dry-run names the routine\'s own chat as scope and never asks for full', () => {

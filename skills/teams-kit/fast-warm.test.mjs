@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Lane, ask, claudeArgs } from './fast-warm.mjs';
 
+import { hostEnv } from './test-env.mjs';
 const KIT = path.dirname(fileURLToPath(import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -148,7 +149,7 @@ function kitSandbox(t, envExtra = '') {
 writeFileSync(process.env.BEING_STATE_DIR + '/ack-in.json', readFileSync(0, 'utf8'));\n`);
   writeFileSync(path.join(kit, '.env'), `BEING_NAME=Testbeing\nBEING_STATE_DIR=${st}\nBEING_WORKSPACE=${path.join(dir, 'ws')}\n` +
     `BEING_FAST_CLIENT=claude\nOWNER_NAME=Owner\nOWNER_OID=owner-oid\nBEING_FAST_WARM_TIMEOUT_MS=1500\n${envExtra}`);
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: home, BEING_KIT_HOME: kit, BEING_STATE_DIR: st };
+  const env = { ...hostEnv(), PATH: `${bin}:${process.env.PATH}`, HOME: home, BEING_KIT_HOME: kit, BEING_STATE_DIR: st };
   const triage = (msgs) => {
     writeFileSync(path.join(st, 'queue.jsonl'), msgs.map((m) => JSON.stringify(m)).join('\n') + '\n');
     const r = spawnSync(path.join(kit, 'being-handle'), ['triage'], { env, encoding: 'utf8' });

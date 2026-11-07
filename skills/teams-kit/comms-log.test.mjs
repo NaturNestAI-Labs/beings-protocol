@@ -8,13 +8,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { hostEnv } from './test-env.mjs';
 const KIT = path.dirname(fileURLToPath(import.meta.url));
 const CL = path.join(KIT, 'comms-log.mjs');
 
 function state(t) {
   const st = mkdtempSync(path.join(tmpdir(), 'conv-'));
   t.after(() => rmSync(st, { recursive: true, force: true }));
-  const env = { ...process.env, BEING_STATE_DIR: st, BEING_COMMS_LOG: path.join(st, 'comms.jsonl') };
+  const env = { ...hostEnv(), BEING_STATE_DIR: st, BEING_COMMS_LOG: path.join(st, 'comms.jsonl') };
   const node = (args, input) => spawnSync('node', [CL, ...args], { encoding: 'utf8', env, input });
   const lines = (f) => (existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
   return { st, node, lines, conv: (n) => path.join(st, 'conversations', n + '.jsonl') };

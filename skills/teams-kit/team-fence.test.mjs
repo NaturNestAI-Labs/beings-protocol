@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { hostEnv } from './test-env.mjs';
 const KIT = path.dirname(fileURLToPath(import.meta.url));
 
 function fence(t) {
@@ -18,7 +19,7 @@ function fence(t) {
   writeFileSync(path.join(mg, 'hive-mind-design-2026-10-12.md'), '---\ntitle: Hive mind design\nshare: team\n---\nbody');
   writeFileSync(path.join(mg, 'Product Strategy (Sam, 2026-07-27).md'), '---\ntitle: x\nshare: team\n---\nbody');
   writeFileSync(path.join(mg, 'deal-notes.md'), '---\ntitle: y\nshare: private\n---\nbody');
-  const env = { ...process.env, OWNER_NAME: 'Sam Lee', BEING_FENCE_PERSONAL_WORDS: '', BEING_WORKSPACE: ws, BEING_LANE: 'team:19:x', BEING_FENCE_DENY: '', BEING_STATE_DIR: path.join(ws, 'state') };
+  const env = { ...hostEnv(), OWNER_NAME: 'Sam Lee', BEING_FENCE_PERSONAL_WORDS: '', BEING_WORKSPACE: ws, BEING_LANE: 'team:19:x', BEING_FENCE_DENY: '', BEING_STATE_DIR: path.join(ws, 'state') };
   return (tool_name, tool_input) => spawnSync('python3', [path.join(KIT, 'team-fence.py')],
     { input: JSON.stringify({ tool_name, tool_input, cwd: ws }), env, encoding: 'utf8' }).status === 2;
 }
@@ -101,7 +102,7 @@ test('a symlink into the private tree is refused by where it points', (t) => {
   const target = path.join(dir, '.beings', 'memory'); mkdirSync(target, { recursive: true });
   writeFileSync(path.join(target, 'day.md'), 'x');
   symlinkSync(target, path.join(dir, 'innocent'));
-  const env = { ...process.env, OWNER_NAME: 'Sam Lee', BEING_WORKSPACE: dir, BEING_LANE: 'team:19:x', BEING_STATE_DIR: path.join(dir, 'state') };
+  const env = { ...hostEnv(), OWNER_NAME: 'Sam Lee', BEING_WORKSPACE: dir, BEING_LANE: 'team:19:x', BEING_STATE_DIR: path.join(dir, 'state') };
   const r = spawnSync('python3', [path.join(KIT, 'team-fence.py')],
     { input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: 'innocent/day.md' }, cwd: dir }), env, encoding: 'utf8' });
   assert.equal(r.status, 2, r.stderr);
@@ -109,7 +110,7 @@ test('a symlink into the private tree is refused by where it points', (t) => {
 
 test('any error inside the fence blocks the call (exit 2), not only unreadable JSON', (t) => {
   const run = (input) => spawnSync('python3', [path.join(KIT, 'team-fence.py')], { input, encoding: 'utf8',
-    env: { ...process.env, BEING_LANE: 'team:19:x' } }).status;
+    env: { ...hostEnv(), BEING_LANE: 'team:19:x' } }).status;
   assert.equal(run('not json'), 2);
   assert.equal(run('[]'), 2);                                                   // AttributeError, not ValueError
   assert.equal(run(JSON.stringify({ tool_name: 'Read', tool_input: 'x' })), 2);  // tool_input not a dict
@@ -176,7 +177,7 @@ test('input over 1 MiB is refused; a large path-heavy input is checked fast; the
   const blocked = fence(t);
   assert.ok(blocked('Write', { file_path: 'work/x', content: 'x'.repeat((1 << 20) + 1) }));
   // exit 0 (checked, allowed), not 2 from the fence's own deadline: the exit code, not the clock, says it was fast
-  const status = (content) => spawnSync('python3', [path.join(KIT, 'team-fence.py')], { encoding: 'utf8', env: { ...process.env, BEING_LANE: 'team:19:x' },
+  const status = (content) => spawnSync('python3', [path.join(KIT, 'team-fence.py')], { encoding: 'utf8', env: { ...hostEnv(), BEING_LANE: 'team:19:x' },
     input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: 'work/x', content }, cwd: tmpdir() }) }).status;
   assert.equal(status('.beings/memory-graph/'.repeat(40000).replace(/\.beings\//g, 'b/')), 0);
   assert.equal(status('.beings/memory-graph/'.repeat(40000)), 0);
@@ -217,7 +218,7 @@ test('content fields are text only for the tools that have them; other tools\' f
 test('the personal-note rule reads the whole path: a deep path or an apostrophe before the word is refused, in linear time', (t) => {
   const blocked = fence(t);
   const status = (tool_name, tool_input) => spawnSync('python3', [path.join(KIT, 'team-fence.py')], { encoding: 'utf8',
-    input: JSON.stringify({ tool_name, tool_input, cwd: tmpdir() }), env: { ...process.env, OWNER_NAME: 'Sam Lee', BEING_LANE: 'team:19:x' } }).status;
+    input: JSON.stringify({ tool_name, tool_input, cwd: tmpdir() }), env: { ...hostEnv(), OWNER_NAME: 'Sam Lee', BEING_LANE: 'team:19:x' } }).status;
   assert.ok(blocked('Read', { file_path: `.beings/memory-graph/${'d/'.repeat(150)}Sam notes.md` }));
   assert.ok(blocked('Read', { file_path: ".beings/memory-graph/it's/Sam notes.md" }));
   assert.ok(blocked('Bash', { command: "cat \".beings/memory-graph/it's/family.md\"" }));
@@ -234,7 +235,7 @@ test('the deadline blocks (exit 2) even when it lands inside a read the fence gu
   assert.equal(spawnSync('mkfifo', [path.join(ws, '.beings', 'memory-graph', 'slow-note.md')]).status, 0);
   const r = spawnSync('python3', [path.join(KIT, 'team-fence.py')], { encoding: 'utf8', timeout: 60000,
     input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: '.beings/memory-graph/slow-note.md' }, cwd: ws }),
-    env: { ...process.env, BEING_WORKSPACE: ws, BEING_LANE: 'team:19:x', BEING_FENCE_DEADLINE: '1' } });
+    env: { ...hostEnv(), BEING_WORKSPACE: ws, BEING_LANE: 'team:19:x', BEING_FENCE_DEADLINE: '1' } });
   assert.equal(r.status, 2, r.stderr);
   assert.match(r.stderr, /took too long/);
 });
@@ -257,7 +258,7 @@ test('a command shlex cannot split is also read with its quotes and backslashes 
 
 test('fail-closed: unreadable input, any internal error, oversize input and an unsplittable command all exit 2', () => {
   const run = (input) => spawnSync('python3', [path.join(KIT, 'team-fence.py')], { input, encoding: 'utf8',
-    env: { ...process.env, BEING_LANE: 'team:19:x' } }).status;
+    env: { ...hostEnv(), BEING_LANE: 'team:19:x' } }).status;
   assert.equal(run('{not json'), 2, 'parse failure');
   assert.equal(run(JSON.stringify({ tool_name: 'Read', tool_input: 7 })), 2, 'internal error');
   assert.equal(run(JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: 'w/x', edits: [{ s: 'x'.repeat((1 << 20) + 1) }] } })), 2, 'oversize');
@@ -266,7 +267,7 @@ test('fail-closed: unreadable input, any internal error, oversize input and an u
 
 test('a block exits 2 even when the hook has no stderr', () => {
   const r = spawnSync('sh', ['-c', `python3 ${JSON.stringify(path.join(KIT, 'team-fence.py'))} 2>&-`], { encoding: 'utf8',
-    input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: '.beings/memory/x.md' } }), env: { ...process.env, BEING_LANE: 'team:19:x' } });
+    input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: '.beings/memory/x.md' } }), env: { ...hostEnv(), BEING_LANE: 'team:19:x' } });
   assert.equal(r.status, 2);
 });
 
@@ -317,7 +318,7 @@ test('BEING_OWNER_BROWSER_DIR names the owner\'s browser profile; it is refused 
   const ws = mkdtempSync(path.join(tmpdir(), 'fence-'));
   t.after(() => rmSync(ws, { recursive: true, force: true }));
   const run = (input) => spawnSync('python3', [path.join(KIT, 'team-fence.py')], { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: input }, cwd: ws }),
-    env: { ...process.env, BEING_WORKSPACE: ws, BEING_LANE: 'team:19:x', BEING_FENCE_DENY: '', BEING_OWNER_BROWSER_DIR: '/srv/profiles/sam-edge' }, encoding: 'utf8' }).status;
+    env: { ...hostEnv(), BEING_WORKSPACE: ws, BEING_LANE: 'team:19:x', BEING_FENCE_DENY: '', BEING_OWNER_BROWSER_DIR: '/srv/profiles/sam-edge' }, encoding: 'utf8' }).status;
   assert.equal(run('ls /srv/profiles/sam-edge/Default'), 2);
   assert.equal(run('ls /srv/profiles/other'), 0);
 });
@@ -328,7 +329,7 @@ test('this lane\'s own job files and job directory stay readable', (t) => {
   mkdirSync(path.join(ws, 'state', 'job-scopes'), { recursive: true });
   writeFileSync(path.join(ws, 'state', 'job-scopes', '1014-010101-mine.json'), JSON.stringify({ scope: 'chats:19:x' }));
   const run = (command) => spawnSync('python3', [path.join(KIT, 'team-fence.py')], { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd: ws }),
-    env: { ...process.env, BEING_WORKSPACE: ws, BEING_STATE_DIR: path.join(ws, 'state'), BEING_LANE: 'team:19:x', BEING_FENCE_DENY: '' }, encoding: 'utf8' }).status;
+    env: { ...hostEnv(), BEING_WORKSPACE: ws, BEING_STATE_DIR: path.join(ws, 'state'), BEING_LANE: 'team:19:x', BEING_FENCE_DENY: '' }, encoding: 'utf8' }).status;
   assert.equal(run('cat state/jobs/1014-010101-mine.result.md'), 0);
   assert.equal(run('ls state/jobs/1014-010101-mine/'), 0);
 });
