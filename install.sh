@@ -5,26 +5,26 @@
 #
 # Usage:
 #   # Fresh install (interactive)
-#   curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash
 #
 #   # Birth a standalone Global Being at ~/beings/<name>/
-#   curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --global
-#   curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --global --name nova --yes
+#   curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --global
+#   curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --global --name nova --yes
 #
 #   # Update an existing Being (interactive)
-#   curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update
+#   curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update
 #
 #   # Update non-interactively (auto-installs basic-memory, skips Axon)
-#   curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update --yes
+#   curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update --yes
 #
 #   # Birth a Global Being with the Operations Kit and the Teams kit (opt-in)
-#   curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --global --name nova --owner "Sam Lee" --with teams-kit --yes
+#   curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --global --name nova --owner "Sam Lee" --with teams-kit --yes
 #
 #   # Add the kit to an existing Being (run in its home; never overwrites)
-#   curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update --name nova --with teams-kit --yes
+#   curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update --name nova --with teams-kit --yes
 #
 #   # Report which protocol and kit pieces a Being home has (changes nothing)
-#   curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --check
+#   curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --check
 #
 # Flags:
 #   --global    Birth a standalone Being at ~/beings/<name>/ with its own home,
@@ -83,7 +83,7 @@ LEAF="🌿"
 CHECK="✓"
 ARROW="→"
 
-BASE_URL="${BEINGS_BASE_URL:-https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main}"   # override to test a fork or branch
+BASE_URL="${BEINGS_BASE_URL:-https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main}"   # override to test a fork or branch
 
 # Resolve the directory of this script (empty if piped from curl)
 SCRIPT_DIR=""
@@ -1635,7 +1635,7 @@ print_update_summary() {
   echo -e "  ${BOLD}Note:${NC} Existing files were ${BOLD}never overwritten${NC}."
   echo -e "  ${DIM}Your Being's identity and memory are untouched.${NC}"
   echo ""
-  echo -e "  ${DIM}https://github.com/VeltriaAI/beings-protocol${NC}"
+  echo -e "  ${DIM}https://github.com/NaturNestAI-Labs/beings-protocol${NC}"
   echo -e "  ${DIM}Built with ${LEAF} by Veltria${NC}"
   echo ""
 }
@@ -1890,7 +1890,7 @@ create_global_being() {
   echo -e "  ${name} will introduce herself, learn who you are,"
   echo -e "  and fill in her identity files. ${DIM}(That's the magic.)${NC}"
   echo ""
-  echo -e "  ${DIM}https://github.com/VeltriaAI/beings-protocol${NC}"
+  echo -e "  ${DIM}https://github.com/NaturNestAI-Labs/beings-protocol${NC}"
   echo ""
 }
 
@@ -1903,7 +1903,7 @@ main() {
   local next_is_ref=false
   for arg in "$@"; do
     if $next_is_ref; then
-      [ -n "${BEINGS_BASE_URL:-}" ] || BASE_URL="https://raw.githubusercontent.com/VeltriaAI/beings-protocol/$arg"
+      [ -n "${BEINGS_BASE_URL:-}" ] || BASE_URL="https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/$arg"
       next_is_ref=false
       continue
     fi
@@ -1944,7 +1944,7 @@ main() {
       --track-private)  TRACK_PRIVATE=true ;;
       --check)          CHECK_MODE=true ;;
       --ref)            next_is_ref=true ;;
-      --ref=*)          [ -n "${BEINGS_BASE_URL:-}" ] || BASE_URL="https://raw.githubusercontent.com/VeltriaAI/beings-protocol/${arg#--ref=}" ;;
+      --ref=*)          [ -n "${BEINGS_BASE_URL:-}" ] || BASE_URL="https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/${arg#--ref=}" ;;
     esac
   done
   load_config
@@ -2134,7 +2134,7 @@ main() {
     echo -e "    ├── PREFERENCES.md   ${DIM}← Work style${NC}"
     echo -e "    └── SECRETS.md       ${DIM}← Credentials${NC}"
     echo ""
-    echo -e "  ${DIM}https://github.com/VeltriaAI/beings-protocol${NC}"
+    echo -e "  ${DIM}https://github.com/NaturNestAI-Labs/beings-protocol${NC}"
     echo -e "  ${DIM}Built with ${LEAF} by Veltria${NC}"
     echo ""
   fi

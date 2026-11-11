@@ -33,7 +33,7 @@ cmd_update() {
     esac; shift
   done
   [[ $ref =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "bad ref: $ref" >&2; return 2; }
-  base="${BEINGS_BASE_URL:-https://raw.githubusercontent.com/VeltriaAI/beings-protocol/$ref}"
+  base="${BEINGS_BASE_URL:-https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/$ref}"
   tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
   curl -fsSL "$base/install.sh" -o "$tmp/install.sh" || { echo "cannot fetch $base/install.sh" >&2; return 1; }
   curl -fsSL "$base/CHANGELOG.md" -o "$tmp/CHANGELOG.md" 2>/dev/null || : > "$tmp/CHANGELOG.md"

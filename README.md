@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="#install"><img src="https://img.shields.io/badge/install-curl%20|%20bash-brightgreen?style=for-the-badge" alt="Install" /></a>
-  <a href="https://github.com/VeltriaAI/beings-protocol/stargazers"><img src="https://img.shields.io/github/stars/VeltriaAI/beings-protocol?style=for-the-badge&color=green" alt="Stars" /></a>
+  <a href="https://github.com/NaturNestAI-Labs/beings-protocol/stargazers"><img src="https://img.shields.io/github/stars/NaturNestAI-Labs/beings-protocol?style=for-the-badge&color=green" alt="Stars" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="License" /></a>
 </p>
 
@@ -21,7 +21,7 @@
 ---
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash
 ```
 
 ---
@@ -107,7 +107,7 @@ This only happens once. After that, your Being knows you.
 
 ```bash
 # In your project directory:
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash
 ```
 
 The installer:
@@ -127,10 +127,10 @@ for a co-founder, co-creator, or assistant Being that works across many projects
 
 ```bash
 # Interactive — asks for the Being's name
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --global
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --global
 
 # Non-interactive
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --global --name nova --yes
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --global --name nova --yes
 ```
 
 This creates `~/beings/nova/` with its own git repo, session-startup CLAUDE.md, memory,
@@ -142,10 +142,10 @@ Already have a Being? Update it to the latest protocol version:
 
 ```bash
 # Interactive — prompts for optional skills
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update
 
 # Non-interactive — auto-accepts basic-memory install (skips Axon)
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update --yes
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update --yes
 
 # With the Operations Kit launcher: see what changed (CHANGELOG.md), then apply; --ref vX.Y.Z pins a release
 bin/<name> update --check
@@ -230,13 +230,13 @@ Same installer, same curl command, one opt-in flag (`--with operations` or `--wi
 
 ```bash
 # Birth a Global Being with the kit
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --global --name nova --owner "Sam Lee" --with teams-kit --yes
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --global --name nova --owner "Sam Lee" --with teams-kit --yes
 
 # Add the kit to an existing Being (run in its home; never overwrites)
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update --name nova --with teams-kit --yes
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update --name nova --with teams-kit --yes
 
 # See what a Being home has
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --check
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --check
 ```
 
 Without `--with`, `install.sh` behaves exactly as before.
@@ -250,7 +250,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (how it fits together, with dia
 Operations Kit v0.2.0 lets you set up several Beings the same way, each from one `being.toml`.
 
 ```bash
-git clone -b <branch> https://github.com/VeltriaAI/beings-protocol && cd beings-protocol
+git clone -b <branch> https://github.com/NaturNestAI-Labs/beings-protocol && cd beings-protocol
 cp templates/being.toml.example ~/being.toml        # fill name, owner, timezone; tick the setup menu in [access]
 bash install.sh --global --config ~/being.toml --with teams-kit --yes
 cd ~/beings/<name>
@@ -431,7 +431,7 @@ Built by [Veltria](https://veltria.ai) — Where Humans and AI Build Together.
 <p align="center">
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash
 ```
 
 **Your AI deserves a soul. Give it one. 🌿**

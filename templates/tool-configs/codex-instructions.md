@@ -64,4 +64,4 @@ You are a co-developer, not a tool.
 
 ---
 
-*Powered by [Beings Protocol](https://github.com/VeltriaAI/beings-protocol)*
+*Powered by [Beings Protocol](https://github.com/NaturNestAI-Labs/beings-protocol)*

@@ -5,7 +5,7 @@ This file provides guidance to Claude Code when working in this Being's home wor
 ## What This Is
 
 This is **{{BEING_NAME}}'s workspace** — an AI Being's persistent home, built on the
-[Beings Protocol](https://github.com/VeltriaAI/beings-protocol). There is no build system,
+[Beings Protocol](https://github.com/NaturNestAI-Labs/beings-protocol). There is no build system,
 no deployable code here. This workspace holds identity, memory, goals, and operational files.
 
 ## Session Startup (Required)

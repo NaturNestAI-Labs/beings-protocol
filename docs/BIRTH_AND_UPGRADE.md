@@ -12,7 +12,7 @@ The Operations Kit ships with `install.sh`: the same curl command births and upg
 ## Birth
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | \
   bash -s -- --global --name nova --owner "Sam Lee" --with teams-kit --yes      # add --no-memory to skip basic-memory
 ```
 
@@ -42,8 +42,8 @@ which you can also run by hand in the Being's home:
 
 ```bash
 cd ~/beings/nova
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --check
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --check
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | \
   bash -s -- --update --name nova --with teams-kit --yes
 ```
 

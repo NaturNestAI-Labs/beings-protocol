@@ -1,6 +1,6 @@
 # Evolution Protocol — Self-Evolving AI Beings
 
-A reusable skill for the [Beings Protocol](https://github.com/VeltriaAI/beings-protocol) that gives any Being the ability to:
+A reusable skill for the [Beings Protocol](https://github.com/NaturNestAI-Labs/beings-protocol) that gives any Being the ability to:
 
 1. **Self-modify** — improve their own code via Claude Code CLI (git worktree isolation, PR-based review)
 2. **Spawn subagents** — create temporary agents for focused tasks with restricted tool sets

@@ -11,7 +11,7 @@ HOME_DIR="${BEING_WORKSPACE:?set BEING_WORKSPACE in $ENVF}"
 # One state folder whoever calls (the daily timer or the Teams handler), so the owner's UPDATE finds the offer.
 STATE="${BEING_UPDATE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/beings-update/$(basename "$HOME_DIR")}"
 REF="${BEING_UPDATE_REF:-main}"                         # where new releases are announced
-REPO="${BEING_UPDATE_REPO:-VeltriaAI/beings-protocol}"  # where problem reports go as pull requests
+REPO="${BEING_UPDATE_REPO:-NaturNestAI-Labs/beings-protocol}"  # where problem reports go as pull requests
 REPORT="${BEING_UPDATE_REPORT:-off}"                    # off | pr (opt-in)
 mkdir -p "$STATE"; chmod 700 "$STATE"; umask 077
 LAUNCHER=""
