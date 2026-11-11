@@ -524,6 +524,12 @@ cmd_doctor() {
       (( armed > 0 )) && warn "$armed container(s) armed to start at boot ($NAME stacks audit)" || ok "no container armed to start at boot"
     fi
   fi
+  if [[ -x "$KIT/being-routine" ]]; then
+    local l
+    while IFS= read -r l; do
+      case "$l" in *FAIL\ *) bad "${l#*FAIL }" ;; *ok\ \ \ *) ok "${l#*ok   }" ;; esac
+    done < <("$KIT/being-routine" --check-units 2>&1 || true)
+  fi
   echo "$NAME doctor: $fails failed, $warns warnings"
   (( fails == 0 ))
 }

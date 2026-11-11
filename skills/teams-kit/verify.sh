@@ -120,6 +120,15 @@ if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/nu
     esac
   done
 else warn "no systemd user session: services not checked"; fi
+echo "[routines and alerts]"
+out=""; [[ -x "$KIT/being-routine" ]] && { out="$("$KIT/being-routine" --check-units 2>&1)" || true; }
+while IFS= read -r l; do
+  case "$l" in *FAIL\ *) bad "${l#*FAIL }" ;; *ok\ \ \ *) ok "${l#*ok   }" ;; esac
+done <<<"$out"
+ch="$(sed -n 's/^[[:space:]]*BEING_ALERT_CHANNEL=["'\'']\{0,1\}\([a-z]*\).*/\1/p' "${BEING_ALERT_ENV:-$HOME/.config/being-alert/alert.env}" 2>/dev/null | tail -1 || true)"
+ch="${BEING_ALERT_CHANNEL:-${ch:-none}}"
+[[ $ch == none ]] && warn "alert channel: none. Health alerts go only to Teams, so if Teams is down no one is told (README, being-deadman)" \
+  || ok "alert channel: $ch (being-deadman --test-alert proves it)"
 loginctl show-user "$(id -un)" -p Linger 2>/dev/null | grep -q '=yes' && ok "linger on" \
   || bad "linger off: services stop at logout and stay down after a reboot (admin: sudo loginctl enable-linger $(id -un))"
 

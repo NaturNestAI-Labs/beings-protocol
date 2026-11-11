@@ -316,6 +316,7 @@ Details moved out of the script headers, so comments stay short.
   1:1, never full. being-job copies the caller's scope into its signed record, so the grant is minted before the job
   starts. `BEING_ROUTINES_FILE` (default `<kit>/routines.conf`, gitignored) holds one `<name> <chat[,chat...]>` per line;
   `owner` as a chat is `OWNER_DM_CHAT`. Each routine's mode is described in `BEING_ROUTINE_SPEC`, a workspace file.
+  A hand-written routine unit needs `KillMode=process`, as in `systemd/being-routine@.service.example`; `being-routine --check-units` (run by `verify.sh` and `doctor`) fails any user unit that starts a job without it.
 - **being-sessions.** `name lane|warm <lane> [--msgs <jsonl>] | name job <name>` prints the name a launch should use;
   `register --name N --lane L --kind work|warm|job|heartbeat --pid P [--sid S] [--perm M] [--job ID]`;
   `end --name N --pid P [--transcript F]` marks a session ended (live notes it never read go the durable way);

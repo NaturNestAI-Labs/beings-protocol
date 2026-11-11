@@ -80,4 +80,19 @@ grep -q '^30 16 \* \* \* ' "$T/crontab.out" 2>/dev/null && ! grep -q CRON_TZ "$T
 miss=""; for f in "$REPO"/tests/*.test.sh; do grep -qF "grep -E '^(BEING_|OWNER_|M365_|HOOK_)'" "$f" || miss+=" $(basename "$f")"; done
 [[ -z $miss ]] && ok "tests drop the host Being's environment" || bad "tests keep the host environment:$miss"
 
+# 8. A hand-made unit that starts a job without KillMode=process is flagged (the job dies when the unit ends).
+U="$T/units"; mkdir -p "$U/fixed.service.d"
+printf '[Service]\nType=oneshot\nExecStart=/k/being-routine update\n' >"$U/handmade.service"
+printf '[Service]\nType=oneshot\nKillMode=process\nExecStart=/k/being-routine brief\n' >"$U/nova-routine@.service"
+printf '[Service]\nExecStart=/k/being-job agent x\n' >"$U/fixed.service"; printf '[Service]\nKillMode=process\n' >"$U/fixed.service.d/kill.conf"
+printf '[Service]\nExecStart=/usr/bin/true\n' >"$U/other.service"
+rc=0; out="$(BEING_UNIT_DIR="$U" bash "$TK/being-routine" --check-units 2>&1)" || rc=$?
+[[ $rc == 1 ]] && grep -q 'FAIL handmade.service starts a job with KillMode=control-group' <<<"$out" \
+  && grep -q 'ok   nova-routine@.service: KillMode=process' <<<"$out" && grep -q 'ok   fixed.service: KillMode=process' <<<"$out" \
+  && ! grep -q other.service <<<"$out" && ok "routine units: missing KillMode=process flagged, drop-ins honoured" || bad "check-units rc $rc: $out"
+rm "$U/handmade.service"; rc=0; BEING_UNIT_DIR="$U" bash "$TK/being-routine" --check-units >/dev/null 2>&1 || rc=$?
+[[ $rc == 0 ]] && ok "routine units: all fine passes" || bad "check-units on good units: rc $rc"
+grep -q 'being-routine" --check-units' "$TK/verify.sh" && grep -q 'being-routine" --check-units' "$REPO/templates/kit/bin/being" \
+  && ok "verify.sh and doctor run the unit check" || bad "unit check not wired into verify.sh / doctor"
+
 echo "kit-fixes: $fails failure(s)"; (( fails == 0 ))

@@ -204,6 +204,13 @@ EOF
 chmod +x "$TMP/bin/node"; printf '#!/bin/sh\nexit 1\n' >"$TMP/bin/systemctl"; chmod +x "$TMP/bin/systemctl"
 "$K/verify.sh" --no-send >"$TMP/out" 2>&1 && grep -q 'Being Teams: signed in as nova@example.com' "$TMP/out" && grep -q 'Being Outlook: signed in' "$TMP/out" \
   && grep -q 'Owner Teams / Owner Outlook: off' "$TMP/out" && ok "verify: Being sessions checked, owner off" || bad "verify: $(cat "$TMP/out")"
+grep -q 'WARN alert channel: none' "$TMP/out" && ok "verify warns when no alert channel is set" || bad "alert channel warn: $(grep -i alert "$TMP/out")"
+cp "$REPO/skills/teams-kit/being-routine" "$K/"; mkdir -p "$TMP/units"
+printf '[Service]\nType=oneshot\nExecStart=%s/being-routine update\n' "$K" >"$TMP/units/nova-update.service"
+BEING_UNIT_DIR="$TMP/units" "$K/verify.sh" --no-send >"$TMP/out" 2>&1 && bad "a unit without KillMode=process passed verify" \
+  || { grep -q 'FAIL nova-update.service starts a job with KillMode=control-group' "$TMP/out" && ok "verify fails a routine unit without KillMode=process" \
+  || bad "verify unit check: $(grep -E 'FAIL|units' "$TMP/out")"; }
+rm "$K/being-routine"
 echo '{}' >"$TMP/owner.json"; chmod 600 "$TMP/owner.json"; printf "OWNER_CACHE='%s'\n" "$TMP/owner.json" >>"$K/.env"
 out=$("$K/verify.sh" --no-send 2>&1 || true); grep -q 'WARN an owner token cache exists while owner access is off' <<<"$out" && ok "verify warns on a stray owner cache" || bad "stray owner cache"
 printf "BEING_OWNER_DELEGATE=1\nOWNER_MAIL_CACHE='%s'\n" "$ST/token-cache.json" >>"$K/.env"

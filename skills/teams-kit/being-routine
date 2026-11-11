@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # being-routine <name> [--dry-run]: start one scheduled routine with a signed grant for that routine's own chats only.
+# being-routine --check-units: FAIL for any user unit that starts a job without KillMode=process (exit 1).
 # Routines are declared in BEING_ROUTINES_FILE (see routines.conf.example and README "Script notes").
 set -euo pipefail
 KIT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -7,6 +8,28 @@ if [[ -f $KIT/.env ]]; then set -a; . "$KIT/.env"; set +a; fi
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 CONF=${BEING_ROUTINES_FILE:-$KIT/routines.conf}
 SPEC=${BEING_ROUTINE_SPEC:-scripts/routines.sh}
+if [[ ${1:-} == --check-units ]]; then
+  # A unit that starts a job must keep it after the unit ends: KillMode=process (or none), as in the template.
+  exec python3 - "${BEING_UNIT_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}" <<'PY'
+import glob, os, re, sys
+d, bad, n = sys.argv[1], 0, 0
+for u in sorted(glob.glob(os.path.join(d, "*.service"))):
+    lines = []
+    for f in [u] + sorted(glob.glob(u + ".d/*.conf")):
+        try: lines += open(f, errors="replace").read().splitlines()
+        except OSError: pass
+    if not any(re.match(r"\s*ExecStart\s*=.*\bbeing-(routine|job)\b", l) for l in lines): continue
+    n += 1
+    km = ([m.group(1) for l in lines for m in [re.match(r"\s*KillMode\s*=\s*(\S*)", l)] if m] or ["control-group"])[-1]
+    if km in ("process", "none"): print(f"  ok   {os.path.basename(u)}: KillMode={km}")
+    else:
+        bad += 1
+        print(f"  FAIL {os.path.basename(u)} starts a job with KillMode={km}: systemd stops the job when the unit ends "
+              "(add KillMode=process under [Service] as in systemd/being-routine@.service.example, then daemon-reload)")
+if not n: print("  -    no user unit starts being-routine or being-job")
+sys.exit(1 if bad else 0)
+PY
+fi
 OWNER_DM=${OWNER_DM_CHAT:?OWNER_DM_CHAT not set (the owner 1:1 chat id)}
 name=${1:?routine name}; dry=0; [[ ${2:-} == --dry-run ]] && dry=1
 chats=$(awk -v n="$name" '$1 == n && $1 !~ /^#/ { print $2; exit }' "$CONF" 2>/dev/null || true)
