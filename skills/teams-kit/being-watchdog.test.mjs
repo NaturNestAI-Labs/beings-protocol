@@ -18,7 +18,7 @@ function kit(t) {
   copyFileSync(path.join(KIT, 'being-watchdog'), path.join(k, 'being-watchdog'));
   copyFileSync(path.join(KIT, 'being-blocker'), path.join(k, 'being-blocker')); chmodSync(path.join(k, 'being-blocker'), 0o755);
   writeFileSync(path.join(k, 'teams-send-dm.mjs'),
-    `import fs from 'fs'; if (fs.existsSync(${JSON.stringify(path.join(dir, 'fail'))})) process.exit(1);\n`
+    `import fs from 'fs'; if (fs.existsSync(${JSON.stringify(path.join(dir, 'fail'))})) { console.error('send refused: test'); process.exit(1); }\n`
     + `fs.appendFileSync(${JSON.stringify(path.join(dir, 'alerts.txt'))}, fs.readFileSync(0, 'utf8') + '\\n---\\n');\n`);
   writeFileSync(path.join(k, '.env'), `BEING_NAME=testbeing\nBEING_STATE_DIR=${st}\nBEING_WORKSPACE=${ws}\nBEING_STALL_MIN=0\n`);
   const procs = [];
@@ -106,4 +106,15 @@ test('died: when the owner alert cannot be sent, the next check retries it once,
   assert.equal(alerts().split('---').filter((x) => x.trim()).length, 1, alerts());
   assert.match(alerts(), new RegExp(`stopped unexpectedly.*${id}`, 's'));
   assert.equal(blockers(st).length, 1);
+});
+
+test('a send that fails leaves its reason in the loop log (stderr), for the blocker and the alert', async (t) => {
+  const { dir, st, run } = kit(t);
+  const id = '0101-000000-silent';
+  gone(st, id);
+  writeFileSync(path.join(dir, 'fail'), '');
+  const r = run();
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, new RegExp(`blocker for ${id} failed \\(exit 1\\): .*send refused: test`));
+  assert.match(r.stderr, new RegExp(`alert job:${id} not sent \\(exit 1\\): send refused: test`));
 });

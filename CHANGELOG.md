@@ -13,6 +13,8 @@ Protocol and Operations Kit versions move together: every release bumps `PROTOCO
 - Shared-mailbox approvals expire at actual send time, including delayed and scheduled sends; every mail rechecks approval and refuses at 24 hours. Legacy exact per-batch go commands remain supported.
 - Owner-access and monitor installers now preserve changed local files and stage upstream copies with manifest reports, including pre-manifest installations.
 - A job started from a systemd unit (a routine timer) no longer dies when that unit ends: it runs in a scope of its own (`BEING_JOB_OWN_SCOPE=off` to opt out). A job killed from outside is recorded as `killed` with its signal; a vanished one (`died`) records a reason and raises a blocker in the owner's 1:1 instead of a plain message, retried at later checks for a day if it could not be sent.
+- `verify.sh` and `<being> doctor` fail any user unit that starts `being-routine` or `being-job` without `KillMode=process` (drop-ins included; `being-routine --check-units`), and `verify.sh` warns when no out-of-band alert channel is set.
+- The watchdog writes why an alert or blocker could not be sent to the loop log, instead of failing silently.
 - Node tests no longer hand kit tools a live Being's `BEING_*`/`OWNER_*` settings (`test-env.mjs`, with a guard test).
 - Teams verification sends test messages only with explicit `--send`; `--no-send` remains supported for update jobs, and waiting for a reply requires `--send`.
 

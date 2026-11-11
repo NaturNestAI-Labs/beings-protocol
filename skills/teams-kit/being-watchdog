@@ -2,7 +2,7 @@
 """being-watchdog: one alert when a job or work run is idle for BEING_STALL_MIN minutes; marks vanished jobs died.
 Activity = transcript/log writes or CPU use anywhere in the job's process tree. A job whose tree only sleeps in a wait
 loop (queued behind other work) is waiting its turn, not stuck. Alerts carry the last tool action from the transcript."""
-import glob, json, os, re, subprocess, time, uuid
+import glob, json, os, re, subprocess, sys, time, uuid
 from datetime import datetime
 
 KIT = os.path.dirname(os.path.realpath(__file__))
@@ -76,6 +76,8 @@ def alert(key, html):
     if key in seen: return
     r = subprocess.run(["node", os.path.join(KIT, "teams-send-dm.mjs"), "--verbatim"], input=html, text=True, capture_output=True)
     if r.returncode == 0: seen[key] = datetime.now().isoformat()
+    else: print(f"{datetime.now().isoformat(timespec='seconds')} watchdog: alert {key} not sent (exit {r.returncode}): "
+                f"{(r.stderr or r.stdout).strip()[-200:]}", file=sys.stderr)   # the loop log; retried at the next check
 
 def stalled(what, since, action=""):
     esc = lambda t: t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -105,6 +107,8 @@ def died(d, why, retry=False):
                         f"Its process is gone and it recorded no exit. {why}.", f"Check being-job log {d['id']} and re-run it if still needed."],
                        capture_output=True, text=True) if os.access(os.path.join(KIT, "being-blocker"), os.X_OK) else None
     if r is not None and r.returncode == 0: seen["job:" + d["id"]] = datetime.now().isoformat(); return
+    if r is not None: print(f"watchdog: blocker for {d['id']} failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()[-200:]}",
+                            file=sys.stderr)
     alert("job:" + d["id"], f"<p>Job “{d['name']}” stopped unexpectedly (its process is gone). Marked as died: "
           f"{why.replace('&', '&amp;').replace('<', '&lt;')}. Log: <code>being-job log {d['id']}</code>.</p>")
 
