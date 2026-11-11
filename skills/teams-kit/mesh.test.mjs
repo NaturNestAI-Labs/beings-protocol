@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hostEnv } from './test-env.mjs';
 
 const KIT = path.dirname(fileURLToPath(import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -56,7 +57,7 @@ writeFileSync(process.env.BEING_STATE_DIR + '/ack-in.json', readFileSync(0, 'utf
     `BEING_FAST_CLIENT=claude\nBEING_FAST_WARM=0\nOWNER_NAME=Owner\nOWNER_OID=owner-oid\nBEING_SINGLE_USER_ACK=1\n` +
     `BEING_CLAUDE_SESSIONS_DIR=${cs}\nBEING_STEER_CMD=${path.join(bin, 'relay')}\n`);
   // Nothing from the host's kit settings leaks in (this job itself runs with the real .env sourced).
-  const host = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(BEING_|OWNER_|M365_|HOOK_)/.test(key)));
+  const host = hostEnv();
   const env = { ...host, PATH: `${bin}:${process.env.PATH}`, HOME: path.join(dir, 'home'), BEING_KIT_HOME: k, BEING_STATE_DIR: st,
     FAKE_LOG: path.join(dir, 'fake.log'), RELAY_LOG: path.join(dir, 'relay.log'), BEING_SEND_TOKEN: '' };
   delete env.BEING_SESSION_NAME;

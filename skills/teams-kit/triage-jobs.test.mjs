@@ -7,11 +7,12 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hostEnv } from './test-env.mjs';
 
 const KIT = path.dirname(fileURLToPath(import.meta.url));
 const A = '19:a@thread.v2', B = '19:b@thread.v2';
 const iso = (minAgo) => new Date(Date.now() - minAgo * 60000).toISOString();
-const host = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(BEING_|OWNER_|M365_)/.test(k)));
+const host = hostEnv();
 
 function fixture(t) {
   const d = mkdtempSync(path.join(tmpdir(), 'triage-jobs-'));

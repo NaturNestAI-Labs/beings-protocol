@@ -7,6 +7,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hostEnv } from './test-env.mjs';
 
 const KIT = path.dirname(fileURLToPath(import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -44,7 +45,7 @@ function kit(t) {
   writeFileSync(path.join(bin, 'codex'), FAKE_CODEX); chmodSync(path.join(bin, 'codex'), 0o755);
   mkdirSync(path.join(dir, 'home', '.codex'), { recursive: true });
   writeFileSync(path.join(k, '.env'), `BEING_NAME=Testbeing\nBEING_STATE_DIR=${st}\nBEING_WORKSPACE=${path.join(dir, 'ws')}\nBEING_SINGLE_USER_ACK=1\n`);
-  const host = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(BEING_|OWNER_|M365_|HOOK_)/.test(key)));
+  const host = hostEnv();
   const env = { ...host, PATH: `${bin}:${process.env.PATH}`, HOME: path.join(dir, 'home'), BEING_STATE_DIR: st };
   const mint = (scope) => spawnSync('node', [path.join(k, 'scope.mjs'), 'mint', scope], { env, encoding: 'utf8' }).stdout.trim();
   const job = (scope, args) => spawnSync(path.join(k, 'being-job'), args, { env: { ...env, BEING_SEND_TOKEN: scope ? mint(scope) : '' }, encoding: 'utf8' });

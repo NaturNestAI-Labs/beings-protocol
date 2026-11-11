@@ -9,6 +9,7 @@ SRC="$REPO/skills/teams-kit"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 # A kit environment inherited from the calling shell would leak into the fixture.
 while read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(BEING_|OWNER_|M365_|HOOK_)' || true)
+unset TMUX TMUX_PANE INVOCATION_ID   # a live tmux server or systemd unit must not reach the test
 fails=0; ok() { echo "  ok  $1"; }; bad() { echo "  FAIL $1"; fails=$((fails + 1)); }
 
 KIT="$TMP/home/nova/ops/teams-kit"; ST="$KIT/state"; mkdir -p "$KIT" "$ST" "$TMP/bin" "$TMP/home/nova/.beings"

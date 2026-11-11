@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline regressions for additive component installs and verification send opt-in.
 set -euo pipefail
-unset TMUX TMUX_PANE
+unset TMUX TMUX_PANE INVOCATION_ID
 while read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(BEING_|OWNER_|M365_|HOOK_)' || true)
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT

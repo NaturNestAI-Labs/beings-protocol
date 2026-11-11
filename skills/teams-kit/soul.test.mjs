@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { hostEnv } from './test-env.mjs';
 
 const KIT = path.dirname(fileURLToPath(import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -85,7 +86,7 @@ function kit(t, { soul = SOUL } = {}) {
   writeFileSync(path.join(be, 'GOALS.md'), '# Goals\n\n> GOALSECRET: ship the thing.\n\n## Section one\n- not in the digest\n');
   writeFileSync(path.join(k, '.env'), `BEING_NAME=Testbeing\nBEING_STATE_DIR=${st}\nBEING_WORKSPACE=${ws}\nBEING_FAST_CLIENT=claude\n` +
     `BEING_FAST_WARM=0\nOWNER_NAME=Owner\nOWNER_OID=owner-oid\nBEING_SINGLE_USER_ACK=1\nBEING_CLAUDE_SESSIONS_DIR=${path.join(dir, 'cs')}\n`);
-  const host = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(BEING_|OWNER_|M365_|HOOK_)/.test(key)));
+  const host = hostEnv();
   const env = { ...host, PATH: `${bin}:${process.env.PATH}`, HOME: path.join(dir, 'home'), BEING_KIT_HOME: k, BEING_STATE_DIR: st,
     FAKE_LOG: path.join(dir, 'fake.log'), BEING_SEND_TOKEN: '', BEING_SOUL_PRIVATE_MARKERS: 'memoir' };
   delete env.BEING_SESSION_NAME;

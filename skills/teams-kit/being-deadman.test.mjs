@@ -7,6 +7,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hostEnv } from './test-env.mjs';
 
 const KIT = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,7 +23,7 @@ appendFileSync(${JSON.stringify(log)}, 'teams ' + readFileSync(0, 'utf8') + '\\n
   const ext = path.join(dir, 'ext.sh');
   writeFileSync(ext, `#!/bin/sh\necho "ext $(cat)" >> ${log}\n`); chmodSync(ext, 0o755);
   writeFileSync(path.join(st, 'watermark'), 'x'); writeFileSync(path.join(st, 'loop.log'), 'x'); writeFileSync(path.join(hook, 'health'), 'ok now\n');
-  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([x]) => !/^(BEING_|HOOK_|NTFY|TELEGRAM)/.test(x))),
+  const env = { ...Object.fromEntries(Object.entries(hostEnv()).filter(([x]) => !/^(NTFY|TELEGRAM)/.test(x))),
     BEING_STATE_DIR: st, HOOK_STATE: hook, BEING_DEADMAN_SKIP_UNIT: '1', BEING_ALERT_ENV: path.join(dir, 'none.env'),
     BEING_ALERT_CHANNEL: 'command', BEING_ALERT_COMMAND: ext };
   const run = (...a) => spawnSync('python3', [path.join(k, 'being-deadman'), ...a], { env, encoding: 'utf8' });

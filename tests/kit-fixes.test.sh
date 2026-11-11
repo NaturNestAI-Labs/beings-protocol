@@ -4,7 +4,7 @@
 set -euo pipefail
 # Never the live Being: kit tools let BEING_* from the environment win over the fixture (job list, hooks, kit home).
 while read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(BEING_|OWNER_|M365_|HOOK_)' || true)
-unset TMUX TMUX_PANE
+unset TMUX TMUX_PANE INVOCATION_ID
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 TK="$REPO/skills/teams-kit"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
@@ -79,6 +79,8 @@ grep -q '^30 16 \* \* \* ' "$T/crontab.out" 2>/dev/null && ! grep -q CRON_TZ "$T
 # 7. Run on a Being's box, a test must not reach the live Being: every shell test drops BEING_*/OWNER_*/HOOK_* first.
 miss=""; for f in "$REPO"/tests/*.test.sh; do grep -qF "grep -E '^(BEING_|OWNER_|M365_|HOOK_)'" "$f" || miss+=" $(basename "$f")"; done
 [[ -z $miss ]] && ok "tests drop the host Being's environment" || bad "tests keep the host environment:$miss"
+miss=""; for f in "$REPO"/tests/*.test.sh; do grep -q '^unset TMUX TMUX_PANE INVOCATION_ID' "$f" || miss+=" $(basename "$f")"; done
+[[ -z $miss ]] && ok "tests drop TMUX and INVOCATION_ID (live tmux server, real systemd scopes)" || bad "tests keep TMUX/INVOCATION_ID:$miss"
 
 # 8. A hand-made unit that starts a job without KillMode=process is flagged (the job dies when the unit ends).
 U="$T/units"; mkdir -p "$U/fixed.service.d"

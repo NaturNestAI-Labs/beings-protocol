@@ -52,7 +52,7 @@ function kit(t) {
     `BEING_FAST_WARM=0\nOWNER_NAME=Owner\nOWNER_OID=owner-oid\nBEING_SINGLE_USER_ACK=1\nBEING_CLAUDE_SESSIONS_DIR=${path.join(dir, 'cs')}\n` +
     `BEING_ISOLATION=bwrap\nBEING_ISOLATION_LANES=team\nBEING_SANDBOX_CLAUDE_ENV=${path.join(dir, 'team-cred.env')}\n`);
   spawnSync(path.join(k, 'isolation', 'make-shims'), [], { encoding: 'utf8' });
-  const host = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(BEING_|OWNER_|M365_|HOOK_)/.test(key)));
+  const host = hostEnv();
   const env = { ...host, PATH: `${cc}:${process.env.PATH}`, HOME: path.join(dir, 'home'), BEING_KIT_HOME: k, BEING_STATE_DIR: st,
     FAKE_LOG: path.join(dir, 'fake.log'), BEING_SEND_TOKEN: '' };
   const run = (cmd, args, extra = {}) => spawnSync(path.join(k, cmd), args, { env: { ...env, ...extra }, encoding: 'utf8', cwd: dir });
@@ -167,7 +167,7 @@ test('bwrap teammate lane: --unshare-net, the model call works through the relay
   const creds = path.join(dir, 'creds.json');
   writeFileSync(creds, JSON.stringify({ claudeAiOauth: { accessToken: 'fixture-access-tok', expiresAt: Date.now() + 3600e3 } }), { mode: 0o600 });
   writeFileSync(path.join(st, 'soul-public.md'), 'public soul\n');
-  const host = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(BEING_|OWNER_|M365_|HOOK_)/.test(key)));
+  const host = hostEnv();
   const env = { ...host, HOME: path.join(dir, 'home'), BEING_KIT_HOME: k, BEING_STATE_DIR: st, BEING_WORKSPACE: ws, BEING_NAME: 'Testbeing',
     BEING_ISOLATION: 'bwrap', BEING_ISOLATION_LANES: 'team', BEING_PROXY_CRED: creds, BEING_PROXY_UPSTREAM: `http://127.0.0.1:${upport}` };
   assert.equal(spawnSync('python3', [path.join(k, 'team-sync'), '19:net@thread.v2'], { env, encoding: 'utf8' }).status, 0);

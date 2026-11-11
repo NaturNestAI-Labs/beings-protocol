@@ -4,6 +4,7 @@
 set -euo pipefail
 # Never the live Being: kit tools let BEING_* from the environment win over the fixture (job list, hooks, kit home).
 while read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(BEING_|OWNER_|M365_|HOOK_)' || true)
+unset TMUX TMUX_PANE INVOCATION_ID   # a live tmux server or systemd unit must not reach the test
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 PC="$REPO/templates/kit/guards/publish-check.sh"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT

@@ -6,9 +6,10 @@ import { copyFileSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileS
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hostEnv } from '../teams-kit/test-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)), TK = path.join(HERE, '..', 'teams-kit');
-const host = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(BEING_|OWNER_|M365_|HOOK_)/.test(k)));
+const host = hostEnv();
 
 function doctor(t, web) {
   const k = mkdtempSync(path.join(tmpdir(), 'oadoc-')); t.after(() => rmSync(k, { recursive: true, force: true }));

@@ -7,6 +7,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hostEnv } from './test-env.mjs';
 
 const KIT = path.dirname(fileURLToPath(import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -23,7 +24,7 @@ function kit(t) {
   writeFileSync(path.join(k, '.env'), `BEING_NAME=testbeing\nBEING_STATE_DIR=${st}\nBEING_WORKSPACE=${ws}\nBEING_STALL_MIN=0\n`);
   const procs = [];
   t.after(() => { for (const p of procs) { try { process.kill(-p.pid, 'SIGKILL'); } catch { /* gone */ } } rmSync(dir, { recursive: true, force: true }); });
-  const host = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(BEING_|OWNER_|M365_)/.test(key)));
+  const host = hostEnv();
   const env = { ...host, HOME: home };
   const claudeDir = path.join(home, '.claude', 'projects', ws.replace(/[/.]/g, '-'));
   const job = (id, o, script) => {

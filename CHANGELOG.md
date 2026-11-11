@@ -27,6 +27,7 @@ Protocol and Operations Kit versions move together: every release bumps `PROTOCO
 - Components (`runner`, `owner-access`, `monitor`, `desktop`, `tunnel`, ...) install and update over curl and through `<being> update`: each ships a `kit-files.txt`, and its install hook runs from a fetched copy of the kit layout it needs. Before, a curl install stopped with "unknown --with component", so `<being> update` failed for every Being with a component.
 - `owner-access-doctor.mjs` fails a browser ability (`owner_files`, `owner_web_pages`) whose `[owner_web]` hosts are still the example's placeholders or whose `playwright-core` is missing, instead of reporting ok until first use.
 - macOS (bash 3.2, BSD tools): the `bin/<being>` launcher no longer needs bash 4 (it stopped at load on macOS), file hashes fall back to `shasum`, so updates no longer report every file as a local change there, and `CHANGES.txt` is rewritten without `sed -i`.
+- Tests run from inside a unit or a tmux pane (a Being's job) no longer start real systemd scopes or reach a live tmux server: shell tests unset `INVOCATION_ID` and `TMUX`, Node tests use `hostEnv()` everywhere (three tests had kept `HOOK_*` or `OWNER_*`), and the guards cover both.
 
 ## [0.5.0] - 2026-11-03 (kit 0.3.0)
 
