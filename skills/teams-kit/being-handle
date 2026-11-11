@@ -439,8 +439,8 @@ only if you have not posted in that chat within about a minute: just send your a
   jobs), tell the person it's underway, and stop. You'll be woken with the result. Follow .beings/JOB-CHECKLIST.md.
 - "Status?" questions: check {{KIT}}/being-job list / status <id> and {{KIT}}/being-status; never answer from memory alone.
 - BLOCKERS: if a step fails twice for a reason outside your control (auth, permission, lock, quota, network, missing input,
-  unclear ask, broken tool), STOP and run {{KIT}}/being-blocker "<task>" "<exact error>" "<what you need>". No retry loops
-  over 2 minutes. Then finish whatever else you can.
+  unclear ask, broken tool), STOP and run {{KIT}}/being-blocker "<task>" "<why, plain words>" "<what you need>" "<exact error, logged only>".
+  No retry loops over 2 minutes. Then finish whatever else you can.
 - Owner lane: append a short entry to today's .beings/memory/ log for what you did (append with a shell `>>`: other lanes
   may be writing to it at the same moment). A teammate lane cannot open that log: its record is the board line below.
 - When you promise, finish or hand off something, add one board line: {{KIT}}/being-board add promise|done|handoff "<one line>".

@@ -119,6 +119,8 @@ if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/nu
       *) [[ "$u" == "$BEING_NAME-teams.service" ]] && warn "$u: not installed (being-teams autostart on)" ;;
     esac
   done
+  uf="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$BEING_NAME-teams.service"
+  [[ -f $uf ]] && ! grep -qE '^ExecStart=.*being-teams __run\b' "$uf" && bad "$BEING_NAME-teams.service is from an older kit: it can hang on start (being-teams autostart on)"
 else warn "no systemd user session: services not checked"; fi
 echo "[routines and alerts]"
 out=""; [[ -x "$KIT/being-routine" ]] && { out="$("$KIT/being-routine" --check-units 2>&1)" || true; }

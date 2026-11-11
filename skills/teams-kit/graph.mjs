@@ -4,6 +4,8 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { ownerMatch } from './kit-env.mjs';
 import { writeCache } from './cache-write.mjs';
+// A Graph read that hangs (seen: 5 min header waits) would stall the watcher loop; writes are never cut short.
+export const GRAPH_TIMEOUT_MS = Number(process.env.BEING_GRAPH_TIMEOUT_MS) || 20000;
 
 export const need = (k) => {
   const v = process.env[k];
@@ -56,6 +58,8 @@ export async function connect({ upn, scopes, cache = need('BEING_CACHE'), sender
       method: method || (body === undefined ? 'GET' : 'POST'),
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(headers || {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
+      // Reads only: a timed-out write may still have happened, so it is never cut short (and never retried here).
+      ...(body === undefined && (!method || method === 'GET') ? { signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS) } : {}),
     });
     const t = await r.text();
     if (!r.ok) throw new Error(`${r.status} ${url.slice(0, 80)}: ${t.slice(0, 200)}`);

@@ -87,8 +87,8 @@ when you finish. Do not message anyone except through being-blocker; the daily s
 Final step: write a short result summary (what was produced, file paths, how you verified it, anything unverified or blocked)
 to the RESULT file below.
 - BLOCKERS: if a step fails twice for a reason outside your control (auth, permission, lock, quota, network, missing input,
-  unclear ask, broken tool), STOP and run {{KIT}}/being-blocker "<task>" "<exact error>" "<what you need>". No retry loops
-  over 2 minutes. Then finish whatever else you can.
+  unclear ask, broken tool), STOP and run {{KIT}}/being-blocker "<task>" "<why, plain words>" "<what you need>" "<exact error, logged only>".
+  No retry loops over 2 minutes. Then finish whatever else you can.
 RULES
 RULES=${RULES//\{\{KIT\}\}/$KREL}
 
@@ -152,7 +152,8 @@ case "${1:-list}" in
   DECISIONS.md, AUTONOMY.md, GOALS.md, ORG.md, .beings/memory/, .beings/bond/), .beings-local/, the hive, credential stores,
   any .env, other sessions, kit state or owner tools, and never use or hint at anything personal about the owner or anyone else."
     fi
-    mapfile -t payload < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["payload"]))' "$jf")
+    mapfile -d '' -t payload < <(python3 -c 'import json,sys
+for p in json.load(open(sys.argv[1]))["payload"]: sys.stdout.write(p+"\0")' "$jf")   # NUL: an argument may hold newlines
     # OS isolation (isolation/README.md): a job of a sandboxed lane (BEING_ISOLATION_LANES=team: teammate jobs only) starts
     # through being-launch, with the grant held by the run's broker; the RESULT file is collected back into kit state.
     launch=(); iso="${BEING_ISOLATION:-off}"

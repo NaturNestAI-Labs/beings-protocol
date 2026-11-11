@@ -252,3 +252,12 @@ test('own scope: off by BEING_JOB_OWN_SCOPE=off (recorded), and never outside a 
   assert.equal(plain.rec(plain.id).started_in, undefined); assert.equal(plain.calls(), '');
   assert.ok(await plain.until(() => plain.work().length === 1));
 });
+
+test('a run job keeps an argument that holds newlines whole (bash -c with a multi-line script)', async (t) => {
+  const { dir, job, work, until } = kit(t);
+  const out = path.join(dir, 'lines');
+  const r = job('full', ['run', 'ml', '--notify', '19:owner-chat', '--', 'bash', '-c', `echo one >${out}\necho two >>${out}`]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(await until(() => work().length === 1)); assert.equal(work()[0].status, 'done');
+  assert.equal(readFileSync(out, 'utf8'), 'one\ntwo\n');
+});

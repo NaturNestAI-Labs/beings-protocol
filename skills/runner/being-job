@@ -28,7 +28,13 @@ json.dump({"id":id_,"kind":kind,"name":name,"notify":notify,"add_dirs":add_dirs,
            "session_id":str(uuid.uuid4()) if kind=="agent" else "","status":"running",
            "started":datetime.datetime.now().astimezone().isoformat()},open(f,"w"),indent=2)
 PY
-  setsid "$0" __exec "$id" </dev/null >/dev/null 2>&1 &
+  # Started from a systemd unit: run in a scope of its own, or the unit's end kills the job with it (KillMode).
+  local own=()
+  if [[ -n ${INVOCATION_ID:-} && ${BEING_JOB_OWN_SCOPE:-on} != off ]] && command -v systemd-run >/dev/null \
+     && systemd-run --user --scope --quiet --collect true >/dev/null 2>&1; then
+    own=(systemd-run --user --scope --quiet --collect --unit "being-job-$id")
+  fi
+  ${own[@]+"${own[@]}"} setsid "$0" __exec "$id" </dev/null >/dev/null 2>&1 &
   echo "$id"
 }
 
@@ -38,8 +44,8 @@ ends when you finish. Do not message anyone except through being-blocker; the ma
 Final step: write a short result summary (what was produced, file paths, how you verified it, anything unverified or
 blocked) to the RESULT file below.
 - BLOCKERS: if a step fails twice for a reason outside your control (auth, permission, lock, quota, network, missing input,
-  unclear ask, broken tool), STOP and run $BIN/being-blocker "<task>" "<exact error>" "<what you need>". No retry loops
-  over 2 minutes. Then finish whatever else you can.
+  unclear ask, broken tool), STOP and run $BIN/being-blocker "<task>" "<why, plain words>" "<what you need>" "<exact error, logged only>".
+  No retry loops over 2 minutes. Then finish whatever else you can.
 RULES
 
 case "${1:-list}" in
@@ -55,7 +61,8 @@ case "${1:-list}" in
     id=$2; jf="$JOBS/$id.json"; log="$JOBS/$id.log"; result="$JOBS/$id.result.md"
     echo $$ >"$JOBS/$id.pid"   # setsid made this process a group leader: stop kills the group
     kind=$(json_get "$jf" kind)
-    mapfile -t payload < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["payload"]))' "$jf")
+    mapfile -d '' -t payload < <(python3 -c 'import json,sys
+for p in json.load(open(sys.argv[1]))["payload"]: sys.stdout.write(p+"\0")' "$jf")   # NUL: an argument may hold newlines
     set +e
     if [[ $kind == agent ]]; then
       (cd "$WORKSPACE" && claude -p --dangerously-skip-permissions --model "$(json_get "$jf" model)" \

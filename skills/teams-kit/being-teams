@@ -10,6 +10,7 @@ set -a
 set +a
 STATE="${BEING_STATE_DIR:?set BEING_STATE_DIR in .env}"
 PIDF="$STATE/loop.pid"; LOG="$STATE/loop.log"; WM="$STATE/watermark"; MWM="$STATE/mail-watermark"; OWM="$STATE/owner-watermark"
+STEP_MAX="${BEING_STEP_TIMEOUT:-120}"   # seconds: a hung Graph call or side step must not stall message detection
 TICK="${BEING_TICK_SEC:-30}"; PRESENCE_EVERY=$(( 300 / TICK > 0 ? 300 / TICK : 1 ))   # presence every ~5 min, expiry 15 min
 COMMS="${BEING_COMMS_LOG:-$STATE/comms.jsonl}"
 HOOK="${HOOK_STATE:-$HOME/.local/state/graph-webhook}"; KICK="$HOOK/kick"
@@ -34,6 +35,9 @@ mkdir -p "$STATE"
 alive() { [[ -f "$PIDF" ]] && kill -0 "$(cat "$PIDF")" 2>/dev/null; }
 UNIT="${BEING_NAME}-teams.service"; UNITF="$HOME/.config/systemd/user/$UNIT"
 via_systemd() { systemctl --user is-enabled -q "$UNIT" 2>/dev/null; }
+# A unit from an older kit (ExecStart=being-teams up) runs up/down inside its own start/stop job: systemctl would wait on itself.
+in_own_unit() { [[ -n ${INVOCATION_ID:-} && "$(systemctl --user show -p InvocationID --value "$UNIT" 2>/dev/null)" == "$INVOCATION_ID" ]]; }
+old_unit() { [[ -f $UNITF ]] && ! grep -qE '^ExecStart=.*being-teams __run\b' "$UNITF"; }
 # Stop a loop that is not the unit's (started by hand or by an older being-teams) and anything its process group left
 # behind (fast path, detect standbys, warm daemon). Handler runs and jobs are in their own sessions (setsid): untouched.
 loop_cleanup() {
@@ -179,10 +183,11 @@ loop() {
       setsid "$KIT/being-handle" warm </dev/null >/dev/null 2>&1 &
     fi
     if (( n % PRESENCE_EVERY == 0 || pfail )); then   # a failed refresh is retried on the next tick
-      if node teams-presence.mjs available >/dev/null 2>>"$LOG"; then pfail=0; else pfail=1; echo "$(date -Is) presence refresh failed" >>"$LOG"; fi
+      if timeout "$STEP_MAX" node teams-presence.mjs available >/dev/null 2>>"$LOG"; then pfail=0; else pfail=1; echo "$(date -Is) presence refresh failed" >>"$LOG"; fi
     fi
     start=$(date -u +%FT%TZ)
-    set +e; out=$(node teams-detect.mjs "$(cat "$WM")" 2>>"$LOG"); rc=$?; set -e
+    set +e; out=$(timeout "$STEP_MAX" node teams-detect.mjs "$(cat "$WM")" 2>>"$LOG"); rc=$?; set -e
+    (( rc == 124 )) && echo "$(ts) sweep timed out after ${STEP_MAX}s" >>"$LOG"
     if (( rc == 10 || rc == 11 )); then
       dispatch "$out" poll
       (( rc == 10 )) && rc=0
@@ -192,7 +197,7 @@ loop() {
     if [[ "${BEING_OWNER_DELEGATE:-0}" == 1 && -s "${OWNER_CACHE:-}" && -n "${OWNER_OID:-}" ]]; then
       [[ -s "$OWM" ]] || echo "$start" >"$OWM"
       set +e; oout=$(BEING_CACHE="$OWNER_CACHE" BEING_UPN="$OWNER_UPN" BEING_NAME="${OWNER_NAME:-owner}" \
-        node teams-detect.mjs "$(cat "$OWM")" 2>>"$LOG"); orc=$?; set -e
+        timeout "$STEP_MAX" node teams-detect.mjs "$(cat "$OWM")" 2>>"$LOG"); orc=$?; set -e
       if (( orc == 10 || orc == 11 )); then
         local self; self=$(cat "$STATE/being-oid" 2>/dev/null || echo "-")
         printf '%s\n' "$oout" | enqueue "o:" owner "$self" >/dev/null
@@ -203,17 +208,17 @@ loop() {
     fi
     # Mail is logged and notified, never auto-answered.
     if [[ "${BEING_MAIL_WATCH:-1}" == 1 ]]; then
-      set +e; node mail.mjs --detect "$(cat "$MWM")" >/dev/null 2>>"$LOG"; mrc=$?; set -e
+      set +e; timeout "$STEP_MAX" node mail.mjs --detect "$(cat "$MWM")" >/dev/null 2>>"$LOG"; mrc=$?; set -e
       if (( mrc == 10 )) && command -v notify-send >/dev/null; then notify-send "$BEING_NAME · Mail" "New mail" || true; fi
       (( mrc == 0 || mrc == 10 )) && echo "$start" >"$MWM"
     fi
     # Failed work and sends get another go (at most BEING_RETRY_MAX tries in all, with backoff), then one alert: being-retry.
-    python3 "$KIT/being-retry" run >>"$LOG" 2>&1 || echo "$(date -Is) retry stage failed" >>"$LOG"
-    (( n % 4 == 0 )) && { python3 "$KIT/being-watchdog" 2>>"$LOG" || echo "$(date -Is) watchdog failed" >>"$LOG"; }
+    timeout "$STEP_MAX" python3 "$KIT/being-retry" run >>"$LOG" 2>&1 || echo "$(date -Is) retry stage failed" >>"$LOG"
+    (( n % 4 == 0 )) && { timeout "$STEP_MAX" python3 "$KIT/being-watchdog" 2>>"$LOG" || echo "$(date -Is) watchdog failed" >>"$LOG"; }
     # Warm lanes pick up a changed digest (board, DECISIONS.md, GOALS.md, SOUL.md) ahead of the next message: being-handle
     # warm restarts only the lanes whose prompt changed (soul.py digest key), and skips the run while triage holds its lock.
     warm_on && (( n % 2 == 1 )) && { setsid "$KIT/being-handle" warm </dev/null >/dev/null 2>&1 & }
-    (( n % 120 == 0 )) && { node scope.mjs prune >/dev/null 2>>"$LOG" || true; }
+    (( n % 120 == 0 )) && { timeout "$STEP_MAX" node scope.mjs prune >/dev/null 2>>"$LOG" || true; }
     (( n % 20 == 0 )) && carryover_due && { setsid "$KIT/being-handle" work </dev/null >/dev/null 2>&1 & }
     n=$((n + 1)); nap || true
   done
@@ -237,6 +242,8 @@ TimeoutStartSec=$((wait + 60))
 ExecStart=$KIT/being-teams __run
 # Stops the loop's process group only; handler runs and jobs (own sessions) finish their work.
 ExecStop=$KIT/being-teams __stop
+# One run killed for memory must not stop the watcher (systemd default: stop the whole unit).
+OOMPolicy=continue
 KillMode=process
 TimeoutStopSec=20
 Restart=always
@@ -253,7 +260,8 @@ need_owner() { [[ -n "${OWNER_OID:-}" ]] || { echo "OWNER_OID is empty in .env: 
 case "${1:-status}" in
   up)
     need_owner
-    if via_systemd; then
+    in_own_unit && echo "$(ts) started by an older unit file: run 'being-teams autostart on' to rewrite it" >>"$LOG"
+    if via_systemd && ! in_own_unit; then
       # A loop outside the unit (hand-started) would run twice: stop it first.
       if alive && [[ "$(cat "$PIDF")" != "$(systemctl --user show -p MainPID --value "$UNIT")" ]]; then loop_cleanup; fi
       systemctl --user start "$UNIT"; echo "up (systemd)"; exit 0
@@ -264,11 +272,11 @@ case "${1:-status}" in
     setsid "$0" __loop >>"$LOG" 2>&1 </dev/null & echo $! >"$PIDF"
     sleep 2; if alive; then echo "up (pid $(cat "$PIDF"))"; else echo "failed to start; see $LOG"; exit 1; fi ;;
   down)
-    if via_systemd; then systemctl --user stop "$UNIT"; alive && loop_cleanup; echo down; exit 0; fi
+    if via_systemd && ! in_own_unit; then systemctl --user stop "$UNIT"; alive && loop_cleanup; echo down; exit 0; fi
     # The warm daemon is in the loop's group; this also stops one left over from an older loop.
     loop_cleanup; (cd "$KIT" && node teams-presence.mjs offline) || true; echo down ;;
   restart)
-    if via_systemd; then
+    if via_systemd && ! in_own_unit; then
       if alive && [[ "$(cat "$PIDF")" != "$(systemctl --user show -p MainPID --value "$UNIT")" ]]; then loop_cleanup; fi
       systemctl --user restart "$UNIT"; echo "restarted (systemd)"; exit 0
     fi
@@ -291,7 +299,8 @@ case "${1:-status}" in
     (cd "$KIT" && echo "presence: $(node teams-presence.mjs status 2>/dev/null || echo unknown)")
     echo "$(python3 "$KIT/being-sessions" 2>/dev/null | head -1 || echo 'sessions: unknown')" ;;
   doctor)   # how far the guarantees in GUARDRAILS.md "Threat model" hold on this host; exit 1 on any FAIL
-    python3 - "$KIT" "$STATE" "${BEING_CACHE:-}" "${OWNER_CACHE:-}" "${BEING_MODEL_USER:-}" "${BEING_OWNER_DELEGATE:-0}" "${BEING_SINGLE_USER_ACK:-0}" <<'PY' ;;
+    drc=0; old_unit && { echo "  FAIL $UNIT is from an older kit (no __run): it can hang on start; run being-teams autostart on"; drc=1; }
+    python3 - "$KIT" "$STATE" "${BEING_CACHE:-}" "${OWNER_CACHE:-}" "${BEING_MODEL_USER:-}" "${BEING_OWNER_DELEGATE:-0}" "${BEING_SINGLE_USER_ACK:-0}" <<'PY' || drc=1
 import os,sys,stat,pwd,shutil,subprocess
 kit,state,bc,oc,model,deleg,ack=sys.argv[1:8]; me=pwd.getpwuid(os.getuid()).pw_name; bad=0
 key=os.path.join(state,"handler.key")
@@ -329,6 +338,7 @@ for p in (kit,os.path.join(kit,".env"),state,os.path.join(state,"grants"),key,bc
 if not bad: print(f"  ok   isolation: .env, caches, grants and handler key held by {me} are out of {model}'s reach")
 sys.exit(1 if bad else 0)
 PY
+    exit "$drc" ;;
   logs) tail -n "${2:-40}" "$LOG" ;;
   handler) tail -n "${2:-40}" "$STATE/handler.log" ;;
   inbox) tail -n "${2:-20}" "$COMMS" 2>/dev/null | python3 -c 'import json,sys

@@ -9,7 +9,7 @@
 - **Corrections become rules:** when the owner corrects you, write a fact file (type `rule`, with Why and How to apply) and
   add a 🔴 line to the index in the same turn. If the mistake can recur mechanically, propose a guard in code too.
 - **Long work:** hand it to `ops/teams-kit/being-job` with a prompt that follows `.beings/JOB-CHECKLIST.md`.
-- **Blocked?** `ops/teams-kit/being-blocker "<task>" "<exact error>" "<need>"` after two failures; never loop.
+- **Blocked?** `ops/teams-kit/being-blocker "<task>" "<why, plain words>" "<need>" "<exact error, logged only>"` after two failures; never loop.
 - **Status:** `ops/teams-kit/being-status` and `being-job list` before answering "status?".
 - **Auto-memory:** Claude Code's per-project memory (`.beings/auto-memory-live/`) is part of memory: one fact per file,
   one line each in its `MEMORY.md`. Keep that index under ~24 KB; `bin/<name> doctor` warns before it is cut off.
