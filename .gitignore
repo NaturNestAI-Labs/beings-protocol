@@ -49,3 +49,19 @@ Pipfile.lock
 # Logs
 logs/
 *.log
+
+# --- never commit secrets, state, routines or backups ---
+.env*
+!.env.example
+**/state/
+node_modules/
+*.bak-*
+*.bak
+*token-cache*
+*owner-cache*
+*.key
+*.pem
+.secrets/
+*.working-*
+skills/teams-kit/isolation/shims/
+skills/teams-kit/routines.conf

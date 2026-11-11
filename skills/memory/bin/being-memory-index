@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Keep the basic-memory index current from a <project>-memory-index user unit: watch | once | install | uninstall.
+# watch = `basic-memory sync --watch` when the CLI has it, else an incremental reindex every BEING_BM_INTERVAL s (300).
+set -euo pipefail
+SELF="$(readlink -f "$0")"
+HOME_DIR="${BEING_HOME:-$(cd "$(dirname "$SELF")/.." && pwd -P)}"
+PROJECT="${BEING_BM_PROJECT:-$(basename "$HOME_DIR")}"
+BM="${BEING_BM_BIN:-basic-memory}"
+INTERVAL="${BEING_BM_INTERVAL:-300}"
+UNIT="$PROJECT-memory-index"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+
+once() {
+  if "$BM" reindex --help >/dev/null 2>&1; then "$BM" reindex --project "$PROJECT"
+  else "$BM" sync --project "$PROJECT"; fi
+}
+
+case "${1:-watch}" in
+  watch)
+    if "$BM" sync --help >/dev/null 2>&1; then exec "$BM" sync --watch; fi
+    while :; do once >/dev/null 2>&1 || echo "being-memory-index: reindex failed, retrying in ${INTERVAL}s" >&2; sleep "$INTERVAL"; done ;;
+  once) once ;;
+  install)
+    mkdir -p "$UNIT_DIR"
+    cat >"$UNIT_DIR/$UNIT.service" <<EOF
+[Unit]
+Description=basic-memory index for $PROJECT
+
+[Service]
+Environment=BEING_HOME=$HOME_DIR
+Environment=PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=$SELF watch
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target
+EOF
+    systemctl --user daemon-reload && systemctl --user enable --now "$UNIT.service" && echo "$UNIT.service running" ;;
+  uninstall)
+    systemctl --user disable --now "$UNIT.service" 2>/dev/null || true
+    rm -f "$UNIT_DIR/$UNIT.service"; systemctl --user daemon-reload 2>/dev/null || true ;;
+  *) echo "usage: being-memory-index watch|once|install|uninstall" >&2; exit 2 ;;
+esac

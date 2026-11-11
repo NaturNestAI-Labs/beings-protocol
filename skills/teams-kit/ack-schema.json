@@ -1,0 +1,58 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "actions",
+    "summary"
+  ],
+  "properties": {
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "chatId",
+          "messageId",
+          "action",
+          "text",
+          "answered",
+          "needsWork",
+          "emoji"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "none",
+              "react",
+              "reply"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "answered": {
+            "type": "boolean",
+            "description": "true when text is the complete answer (action reply), not just an acknowledgement"
+          },
+          "needsWork": {
+            "type": "boolean"
+          },
+          "emoji": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Durable registry of the Being's Claude Code sessions, so a deleted session is detectable.
+
+Merges into .beings/sessions/manifest.jsonl: refreshes present sessions, adds new ones, and never drops
+one it has seen (a vanished transcript stays, flagged present=false). Also writes INDEX.md.
+Exit 2 when a session disappeared since the last scan (the tripwire), 0 otherwise.
+
+Env: BEING_HOME (default: parent of this script's dir), BEING_SESSION_STORE (Claude's transcript dir for
+that home), BEING_SESSION_MANIFEST, BEING_SESSION_INDEX.
+"""
+import datetime
+import glob
+import json
+import os
+import re
+import sys
+
+HOME = os.environ.get('BEING_HOME') or os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+HOME = os.path.realpath(HOME)
+# Claude Code names a project's transcript dir after its real path, non-alphanumerics as dashes.
+STORE = os.environ.get('BEING_SESSION_STORE') or os.path.expanduser(
+    '~/.claude/projects/' + re.sub(r'[^A-Za-z0-9]', '-', HOME))
+OUT = os.path.join(HOME, '.beings', 'sessions')
+MANIFEST = os.environ.get('BEING_SESSION_MANIFEST', os.path.join(OUT, 'manifest.jsonl'))
+INDEX = os.environ.get('BEING_SESSION_INDEX', os.path.join(OUT, 'INDEX.md'))
+NOW = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
+TODAY = NOW[:10]
+
+
+def scan(path):
+    first = last = cwd = branch = title = None
+    msgs = 0
+    try:
+        with open(path, errors='replace') as fh:
+            for line in fh:
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(d, dict):
+                    continue
+                ts = d.get('timestamp')
+                if ts:
+                    first = ts if first is None or ts < first else first
+                    last = ts if last is None or ts > last else last
+                cwd = d.get('cwd') or cwd
+                branch = d.get('gitBranch') or branch
+                if d.get('type') in ('user', 'assistant'):
+                    msgs += 1
+                if title is None and d.get('type') == 'user':
+                    m = d.get('message')
+                    c = m.get('content') if isinstance(m, dict) else None
+                    txt = c if isinstance(c, str) else next(
+                        (p.get('text') for p in c or [] if isinstance(p, dict) and p.get('type') == 'text'), None) \
+                        if isinstance(c, list) else None
+                    if txt:
+                        txt = ' '.join(txt.split())
+                        if not txt.startswith(('<', 'Caveat:', '[Request interrupted')):
+                            title = txt[:120]
+    except FileNotFoundError:
+        pass
+    return dict(first_seen=first, last_activity=last, messages=msgs, cwd=cwd, git_branch=branch, title=title)
+
+
+def load():
+    reg = {}
+    if os.path.exists(MANIFEST):
+        with open(MANIFEST) as fh:
+            for line in fh:
+                if line.strip():
+                    e = json.loads(line)
+                    reg[e['session_id']] = e
+    return reg
+
+
+def cell(v):
+    return str(v if v is not None else '?').replace('|', '/')
+
+
+def main():
+    os.makedirs(os.path.dirname(MANIFEST), exist_ok=True)
+    reg = load()
+    on_disk = {os.path.basename(p)[:-6]: p for p in glob.glob(os.path.join(STORE, '*.jsonl'))}
+    added, vanished = [], []
+    for sid, p in on_disk.items():
+        info, prev = scan(p), reg.get(sid) or {}
+        if not prev:
+            added.append(sid)
+        reg[sid] = dict(session_id=sid, size_kb=round(os.path.getsize(p) / 1024), messages=info['messages'],
+                        first_recorded=prev.get('first_recorded', TODAY), last_scan=NOW, present=True,
+                        **{k: info[k] or prev.get(k) for k in ('first_seen', 'last_activity', 'cwd', 'git_branch', 'title')})
+    for sid, e in reg.items():
+        if sid not in on_disk:
+            if e.get('present', True):
+                vanished.append(sid)
+            e['present'] = False
+            e['last_scan'] = NOW
+    ordered = sorted(reg.values(), key=lambda e: e.get('first_seen') or e.get('first_recorded') or '')
+    tmp = MANIFEST + '.tmp'
+    with open(tmp, 'w') as fh:
+        for e in ordered:
+            fh.write(json.dumps(e, ensure_ascii=False, sort_keys=True) + '\n')
+    os.replace(tmp, MANIFEST)
+
+    present = [e for e in ordered if e.get('present')]
+    missing = [e for e in ordered if not e.get('present')]
+    with open(INDEX, 'w') as fh:
+        fh.write('# Session Registry\n\n')
+        fh.write(f'*Claude Code sessions of this home. Regenerate with `bin/being-session-registry`. Last scan: {NOW}.*\n\n')
+        fh.write(f'**{len(present)} present, {len(missing)} missing, {len(ordered)} ever seen.**\n\n')
+        if missing:
+            fh.write('## Missing sessions (recorded, now gone from disk)\n\n')
+            fh.write('| session_id | first_seen | last_activity | msgs | title |\n|---|---|---|---|---|\n')
+            for e in missing:
+                fh.write(f"| `{e['session_id']}` | {cell(e.get('first_seen'))} | {cell(e.get('last_activity'))} | "
+                         f"{cell(e.get('messages'))} | {cell(e.get('title') or '')} |\n")
+            fh.write('\n')
+        fh.write('## Present sessions\n\n| session_id | first_seen | last_activity | msgs | KB | title |\n|---|---|---|---|---|---|\n')
+        for e in reversed(present):
+            fh.write(f"| `{e['session_id']}` | {cell(e.get('first_seen'))} | {cell(e.get('last_activity'))} | "
+                     f"{cell(e.get('messages'))} | {cell(e.get('size_kb'))} | {cell(e.get('title') or '')} |\n")
+
+    print(f'sessions: {len(present)} present, {len(missing)} missing, {len(ordered)} total')
+    if added:
+        print(f'newly recorded: {len(added)}')
+    if vanished:
+        print('!! sessions disappeared since the last scan:')
+        for sid in vanished:
+            print(f'   - {sid}')
+        return 2
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

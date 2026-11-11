@@ -1,0 +1,4 @@
+# Copy to workers.conf. One worker per line: <name>|<where to look and what counts>. Lines starting with # are skipped.
+news|Trade press and news from the last 7 days about <topic>. Primary sources only.
+filings|Public tenders, registries or filings about <topic>. Open items only, with deadlines.
+community|Forums, repositories and public posts about <topic>. Note who is asking for what.

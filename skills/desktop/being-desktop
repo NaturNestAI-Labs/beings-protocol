@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# <being>-desktop [open|status|stop] | being-desktop install <being> [--config f]: open a Being's desktop from the
+# owner's laptop: LAN when its RDP port answers, else a local `cloudflared access rdp` forwarder (README.md).
+set -euo pipefail
+SELF="$(readlink -f "$0")"
+NAME="$(basename "$0")"; BEING="${NAME%-desktop}"
+[[ "$BEING" == being || "$BEING" == "$NAME" ]] && BEING=""
+
+usage() { echo "usage: <being>-desktop [open|status|stop]  |  being-desktop install <being> [--config <being.toml>]" >&2; exit 2; }
+
+load() {
+  [[ -n "$BEING" ]] || usage
+  CONF="${XDG_CONFIG_HOME:-$HOME/.config}/$BEING-box"; STATE="${XDG_STATE_HOME:-$HOME/.local/state}/$BEING-desktop"
+  [[ -f "$CONF/box.env" ]] || { echo "missing $CONF/box.env: run being-desktop install $BEING" >&2; exit 2; }
+  # shellcheck source=/dev/null
+  set -a; . "$CONF/box.env"; set +a
+  RDP_PORT="${RDP_PORT:-3389}"; LOCAL_PORT="${LOCAL_PORT:-13389}"; RDP_USER="${RDP_USER:-$BEING}"
+  mkdir -p "$STATE"; chmod 700 "$STATE"
+}
+
+# On the office network? Unknown (no BOX_LAN_SUBNET) counts as maybe, so the LAN probe still runs.
+on_lan() {
+  [[ -n "${BOX_LAN_HOST:-}" ]] || return 1
+  [[ -n "${BOX_LAN_SUBNET:-}" ]] || return 0
+  ip -o -4 addr show 2>/dev/null | awk '{print $4}' | python3 -c 'import ipaddress,sys
+net=ipaddress.ip_network(sys.argv[1], strict=False)
+sys.exit(0 if any(ipaddress.ip_interface(l.strip()).ip in net for l in sys.stdin if l.strip()) else 1)' "$BOX_LAN_SUBNET"
+}
+lan_up() { timeout "${LAN_PROBE_SEC:-2}" bash -c 'exec 3<>/dev/tcp/$0/$1' "$BOX_LAN_HOST" "$RDP_PORT" 2>/dev/null; }
+listening() { ss -Hltn "( sport = :$1 )" 2>/dev/null | grep -q .; }
+viewers() { ss -Htn state established "( sport = :$LOCAL_PORT )" 2>/dev/null | grep -c . || true; }
+fwd_pid() { [[ -f "$STATE/forwarder.pid" ]] && kill -0 "$(cat "$STATE/forwarder.pid")" 2>/dev/null && cat "$STATE/forwarder.pid"; }
+
+client() {
+  local c
+  for c in ${RDP_CLIENT:-xfreerdp3 sdl-freerdp3 xfreerdp}; do command -v "$c" >/dev/null && { echo "$c"; return; }; done
+  echo "no FreeRDP client found (install freerdp3-x11 or freerdp2-x11), or set RDP_CLIENT" >&2; return 1
+}
+
+start_forwarder() {
+  local i
+  if fwd_pid >/dev/null && listening "$LOCAL_PORT"; then return 0; fi
+  listening "$LOCAL_PORT" && { echo "localhost:$LOCAL_PORT is taken by another program; set LOCAL_PORT" >&2; exit 1; }
+  command -v cloudflared >/dev/null || { echo "cloudflared is not installed" >&2; exit 1; }
+  # Prints a session token on success: never let it reach the screen or a log.
+  cloudflared access login "https://${DESKTOP_HOST:?set DESKTOP_HOST in box.env}" >/dev/null 2>&1 || true
+  setsid cloudflared access rdp --hostname "$DESKTOP_HOST" --url "localhost:$LOCAL_PORT" </dev/null >/dev/null 2>&1 &
+  echo $! >"$STATE/forwarder.pid"
+  for ((i = 0; i < 30; i++)); do listening "$LOCAL_PORT" && return 0; sleep 0.5; done
+  echo "tunnel forwarder did not start on localhost:$LOCAL_PORT" >&2; exit 1
+}
+
+stop_forwarder() {
+  local p; p="$(fwd_pid || true)"
+  [[ -n "$p" ]] && kill "$p" 2>/dev/null || true
+  rm -f "$STATE/forwarder.pid"
+}
+
+# The box ends the remote session unless a viewer is still connected there (rdp-session-end.sh now).
+end_session() {
+  [[ "${END_ON_CLOSE:-1}" == 1 ]] || return 0
+  local alias="$BEING-box"; [[ "$VIA" == lan ]] && alias="$BEING-lan"
+  timeout 20 ssh -o BatchMode=yes -o ConnectTimeout=6 "$alias" "${BOX_SESSION_END:-\$HOME/.local/bin/rdp-session-end} now" \
+    >>"$STATE/cleanup.log" 2>&1 || echo "$(date -Is) cleanup via $alias failed; the box reaper ends it later" >>"$STATE/cleanup.log"
+}
+
+cmd_open() {
+  local c target ver pass rc; load; c="$(client)"
+  [[ -s "$CONF/rdp.env" ]] || { echo "missing $CONF/rdp.env (RDP_PASS=..., 0600)" >&2; exit 2; }
+  # Off the office network the LAN probe is skipped at once.
+  if [[ "${1:-}" != --tunnel ]] && on_lan && lan_up; then VIA=lan; target="$BOX_LAN_HOST:$RDP_PORT"
+  else VIA=tunnel; start_forwarder; target="localhost:$LOCAL_PORT"; fi
+  echo "$VIA $(date -Is)" >"$STATE/route"
+  echo "opening $BEING's desktop via $VIA (first frame can take up to a minute: a fresh login)"
+  ver=3; [[ "$c" == xfreerdp ]] && ! "$c" --version 2>/dev/null | grep -q 'version 3' && ver=2
+  local cert=/cert:tofu; [[ $ver == 2 ]] && cert=/cert-tofu
+  pass="$(set -a; . "$CONF/rdp.env"; printf '%s' "${RDP_PASS:-}")"
+  [[ -n "$pass" ]] || { echo "RDP_PASS is empty in $CONF/rdp.env" >&2; exit 2; }
+  set +e
+  printf '%s\n' "$pass" | "$c" "/v:$target" "/u:$RDP_USER" /from-stdin "$cert" /dynamic-resolution +clipboard >>"$STATE/client.log" 2>&1
+  rc=$?; set -e
+  pass=""
+  # Another viewer on the same forwarder keeps it (and the box keeps its session).
+  if [[ $VIA == tunnel && "$(viewers)" == 0 ]]; then stop_forwarder; fi
+  end_session
+  return "$rc"
+}
+
+cmd_status() {
+  load
+  echo "being:      $BEING"
+  echo "last route: $(cat "$STATE/route" 2>/dev/null || echo none)"
+  if [[ -n "$(fwd_pid || true)" ]]; then echo "forwarder:  running (localhost:$LOCAL_PORT, $(viewers) viewer(s))"; else echo "forwarder:  off"; fi
+  if on_lan; then lan_up && echo "LAN:        ${BOX_LAN_HOST} answers on $RDP_PORT" || echo "LAN:        no answer (tunnel will be used)"
+  else echo "LAN:        off the office network (tunnel)"; fi
+  echo "tunnel:     ${DESKTOP_HOST:-not set}"
+  if [[ -s "$CONF/rdp.env" ]]; then echo "password:   present (mode $(stat -c %a "$CONF/rdp.env"))"; else echo "password:   MISSING ($CONF/rdp.env)"; fi
+  echo "client:     $(client 2>/dev/null || echo 'not found')"
+  echo "cloudflared: $(command -v cloudflared >/dev/null && echo found || echo 'not found')"
+}
+
+cmd_install() {
+  local cfg="" bc dir conf ssh_cfg
+  BEING="${1:-}"; shift || true
+  [[ "$BEING" =~ ^[a-z][a-z0-9-]*$ ]] || usage
+  [[ "${1:-}" == --config ]] && cfg="${2:?--config needs a file}"
+  conf="${XDG_CONFIG_HOME:-$HOME/.config}/$BEING-box"; mkdir -p "$conf" "$HOME/.local/bin"; chmod 700 "$conf"
+  install -m 755 "$SELF" "$HOME/.local/bin/$BEING-desktop"
+  get() { echo "$2"; }
+  bc="$(cd "$(dirname "$SELF")/../.." 2>/dev/null && pwd)/scripts/being-config"
+  if [[ -n "$cfg" && -x "$bc" ]]; then get() { "$bc" --file "$cfg" get "$1" "$2"; }; fi
+  local domain lan subnet user; domain="$(get tunnel.domain '<domain>')"; lan="$(get box.lan_address '')"
+  subnet="$(get box.office_subnet '')"; user="$(get desktop.rdp_user "$BEING")"
+  [[ "$lan" == *"<"* ]] && lan=""; [[ "$subnet" == *"<"* ]] && subnet=""
+  if [[ ! -e "$conf/box.env" ]]; then
+    cat >"$conf/box.env" <<EOF
+# $BEING-desktop settings (no secrets here; the password is in rdp.env).
+BOX_LAN_HOST=$lan
+BOX_LAN_SUBNET=$subnet
+DESKTOP_HOST=$(get tunnel.desktop_host "$BEING-desktop").$domain
+SSH_HOST=$(get tunnel.ssh_host "$BEING-ssh").$domain
+RDP_USER=$user
+RDP_PORT=$(get box.rdp_port 3389)
+LOCAL_PORT=$(get desktop.local_port 13389)
+END_ON_CLOSE=$([[ "$(get desktop.end_on_close true)" == true ]] && echo 1 || echo 0)
+EOF
+    chmod 600 "$conf/box.env"; echo "  wrote $conf/box.env (check it)"
+  fi
+  if [[ ! -s "$conf/rdp.env" ]]; then
+    ( umask 077
+      if [[ -t 0 ]]; then read -rsp "  RDP password for $user on $BEING's box (not shown, Enter to skip): " pw; echo
+      else pw=""; fi
+      printf 'RDP_PASS=%q\n' "$pw" >"$conf/rdp.env" )
+    echo "  wrote $conf/rdp.env (0600)"
+  fi
+  ssh_cfg="$HOME/.ssh/config"; mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"; touch "$ssh_cfg"; chmod 600 "$ssh_cfg"
+  if ! grep -qF "# >>> $BEING-box (beings kit)" "$ssh_cfg"; then
+    # shellcheck source=/dev/null
+    ( set -a; . "$conf/box.env"
+      { echo; echo "# >>> $BEING-box (beings kit)"
+        echo "Host $BEING-box"; echo "    HostName $SSH_HOST"; echo "    User $RDP_USER"; echo "    HostKeyAlias $BEING-box"
+        echo "    ProxyCommand cloudflared access ssh --hostname %h"
+        if [[ -n "$BOX_LAN_HOST" ]]; then
+          echo "Host $BEING-lan"; echo "    HostName $BOX_LAN_HOST"; echo "    User $RDP_USER"; echo "    HostKeyAlias $BEING-box"
+          echo "    ConnectTimeout 5"
+        fi
+        echo "# <<< $BEING-box"; } >>"$ssh_cfg" )
+    echo "  added Host $BEING-box / $BEING-lan to $ssh_cfg"
+  fi
+  echo "  installed $HOME/.local/bin/$BEING-desktop; try: $BEING-desktop status"
+}
+
+case "${1:-open}" in
+  install) shift; cmd_install "$@" ;;
+  open) shift || true; cmd_open "$@" ;;
+  --tunnel) cmd_open --tunnel ;;
+  status) cmd_status ;;
+  stop) load; stop_forwarder; echo "forwarder stopped" ;;
+  *) usage ;;
+esac

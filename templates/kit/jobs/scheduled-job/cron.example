@@ -1,0 +1,4 @@
+# Add with `crontab -e`. Prefer a systemd timer: OnCalendar=Mon,Thu *-*-* 10:30:00 <Area/City> keeps the timezone.
+# Debian/Ubuntu cron ignores CRON_TZ and runs on the box clock (often UTC): write the time in box time (`date +%Z`).
+# Example: Mondays and Thursdays at 10:30 box time.
+30 10 * * 1,4 <being-home>/ops/<job>/run.sh run

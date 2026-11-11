@@ -1,0 +1,17 @@
+# Template for @BEING_NAME@-poller.service (skills/runner/kit-install.sh), off until enabled. Your own poller, without
+# the Teams kit; call hook-wait <tick> instead of sleep so the Graph webhook can wake it.
+[Unit]
+Description=@BEING_NAME@ message poller
+After=graph-webhook.service
+ConditionFileIsExecutable=@WORKSPACE@/ops/poller
+
+[Service]
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=@WORKSPACE@
+ExecStart=@WORKSPACE@/ops/poller
+Restart=always
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=default.target

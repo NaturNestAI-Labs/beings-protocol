@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# hook-wait <tick>: sleep until the Graph webhook kicks or the tick ends; drop-in for `sleep "$TICK"` in a poll loop.
+# While the subscription is healthy the tick stretches to HOOK_SLOW_TICK (300 s): polling stays as the fallback.
+tick=${1:-30}; state=${HOOK_STATE:-$HOME/.local/state/graph-webhook}
+{ read -r h _ <"$state/health"; } 2>/dev/null || h=down
+[[ $h == ok ]] && tick=${HOOK_SLOW_TICK:-300}
+k0=$(stat -c %Y.%s "$state/kick" 2>/dev/null)
+for ((i = 0; i < tick; i++)); do
+  sleep 1
+  [[ "$(stat -c %Y.%s "$state/kick" 2>/dev/null)" != "$k0" ]] && exit 0
+done
+exit 0

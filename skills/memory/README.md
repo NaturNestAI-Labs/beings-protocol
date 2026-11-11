@@ -23,7 +23,7 @@ The memory skill follows a two-layer model:
 2. **Hand-editable** — open a note in Obsidian, VS Code, Vim, whatever. Fix a typo, correct a fact, add context. The watcher reindexes automatically.
 3. **Human-readable** — you can actually read what your Being remembers. No binary DB to inspect.
 4. **Obsidian-compatible** — point an Obsidian vault at `memory-graph/` and get a visual knowledge graph for free.
-5. **Rebuildable** — the SQLite index is a cache. Lose it, run `basic-memory sync`, it rebuilds from the markdown.
+5. **Rebuildable** — the SQLite index is a cache. Lose it, run `bin/being-bm-repair`, it rebuilds from the markdown.
 
 ## The note format
 
@@ -86,9 +86,33 @@ Write notes in your own words. basic-memory indexes them into a searchable graph
 
 Two processes keep this working:
 
-1. **`basic-memory sync --watch`** — background daemon. Installed once, runs forever. Watches `memory-graph/` for changes (via fsevents/inotify) and reindexes automatically. Any edit from any tool — your Being via MCP, you via Obsidian, `git pull` from another machine — is picked up within milliseconds.
+1. **The index watcher**, a systemd user unit `<project>-memory-index.service` running `bin/being-memory-index watch`
+   (installed by `install.sh`; it survives reboots, unlike a `nohup` process). On basic-memory versions with
+   `sync --watch` it runs that; newer versions without it get an incremental `reindex` every `BEING_BM_INTERVAL`
+   seconds (300). Without systemd, run `bin/being-memory-index watch` under your own supervisor.
 
-2. **`basic-memory mcp --project <name>`** — MCP server spawned per-session by Claude Code. Reads from the same SQLite index the watcher keeps fresh.
+2. **`basic-memory mcp --project <name>`** — MCP server spawned per-session by Claude Code. Reads from the same SQLite index.
+
+`bin/being-bm-repair [project]` rebuilds the index from the markdown on demand (new box, bulk edits, a corrupt index).
+It uses `reindex --full`, the older `sync`, or the sync service directly, whichever the installed version has.
+
+## The four memory layers
+
+| Layer | Where | Loaded |
+|---|---|---|
+| Identity and rules | `.beings/*.md` | every session |
+| Daily log | `.beings/memory/YYYY-MM-DD.md` | today and yesterday |
+| Auto-memory | `~/.claude/projects/<home>/memory/` (linked as `.beings/auto-memory-live`) | its `MEMORY.md` index every session |
+| Knowledge graph | `memory-graph/` | searched on demand |
+
+**Auto-memory** is Claude Code's own per-project memory: one small file per fact plus a one-line-per-fact `MEMORY.md`
+index. It lives outside git, so the Operations Kit links it into the home for Codex (`AGENTS.md` startup step 6) and
+`bin/being-memory-sync` snapshots it into `.beings/auto-memory/` every night. Claude loads only about the first 24 KB of
+the index; `bin/<name> doctor` warns before entries start being cut off.
+
+**Session registry.** `bin/being-session-registry` keeps `.beings/sessions/manifest.jsonl` and `INDEX.md`: every Claude
+Code session of the home, never dropped, flagged `present: false` when its transcript disappears (exit 2, logged by the
+nightly backup).
 
 ## MCP tools
 
@@ -108,18 +132,19 @@ When your Being is connected via MCP, it can use these tools:
 
 ## Claude Code hooks
 
-Three hooks automate memory capture and recall:
-
-### PreCompact
-Fires before context is compressed. The Being extracts key decisions, learnings, and facts from the session and writes them to `memory-graph/` via `write_note`. Preserves knowledge that would otherwise be lost to compaction.
-
-### Stop (Session End)
-Fires when a session ends. The Being writes a session summary note to `memory-graph/sessions/YYYY-MM-DD.md` capturing what was built, decisions made, and unresolved questions.
+Two hooks, both of which put text into the model's context:
 
 ### SessionStart
-Fires when a new session starts (including resumes). The Being queries `search_notes` and `recent_activity` for context relevant to the conversation, supplementing the always-loaded identity files.
+Fires when a session starts (including resumes). The Being queries `search_notes` and `recent_activity` for context
+relevant to the conversation, supplementing the always-loaded identity files.
 
-Hooks use `echo` to inject instructions into the Being's context. The Being then uses MCP tools to act on those instructions.
+### UserPromptSubmit
+Adds today's date and a reminder to check `.beings/GOALS.md`.
+
+Earlier kits also installed echo-only reminders on PreCompact, Stop, PreToolUse and PostToolUse. Their output never
+reached the model and only added noise, so `install.sh --update` removes them (hooks you wrote yourself are kept).
+Memory is written during work, as the startup files say, not on a reminder. `.claude/settings.local.json` is not
+committed, so run `install.sh --update` once on each new box to get the hooks there.
 
 ## Installation
 
@@ -127,13 +152,13 @@ Hooks use `echo` to inject instructions into the Being's context. The Being then
 
 ```bash
 # Fresh install (interactive)
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash
 
 # Update existing Being (interactive)
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update
 
 # Non-interactive — auto-install basic-memory without prompting
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update --yes
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update --yes
 ```
 
 Use `--yes` when piping via `curl | bash` since there's no TTY for interactive prompts.
@@ -144,7 +169,8 @@ The installer will:
 3. Register the project with basic-memory (using folder name as project name)
 4. Add basic-memory to your MCP configs (`.beings/mcp.json`, `.mcp.json`, `.cursor/mcp.json`)
 5. Install Claude Code hooks into `.claude/settings.local.json` if Claude Code is detected
-6. Start the `basic-memory sync --watch` daemon in the background
+6. Install `bin/being-memory-index` and `bin/being-bm-repair`, and run the index watcher as a systemd user unit
+   (`BEING_NO_SYSTEMD=1` skips it)
 7. Add `.basic-memory/` to `.gitignore`
 
 **For v0.2.0 users upgrading from MegaMemory:** the installer also strips legacy `megamemory` entries from your MCP configs and replaces old MegaMemory hook commands with the new basic-memory ones. Run `bash install.sh --update --yes` and the migration is fully automated — no manual cleanup needed.
@@ -161,8 +187,8 @@ uv tool install basic-memory
 mkdir -p memory-graph
 basic-memory project add my-being "$(pwd)/memory-graph" --default
 
-# 3. Start the watcher
-basic-memory sync --watch &
+# 3. Keep the index current (systemd user unit; see "How it works")
+bin/being-memory-index install
 
 # 4. Add to your MCP config (.mcp.json for Claude Code):
 ```
@@ -209,7 +235,7 @@ This automatically:
 - Adds the new `basic-memory` entry in its place (using your folder name as project name)
 - Replaces old MegaMemory Claude Code hooks (the ones mentioning `understand` / `get_concept`) with the new basic-memory hooks (mentioning `write_note` / `search_notes`)
 - Installs basic-memory via `uv tool` / `pipx` / `pip` if not already present
-- Creates `memory-graph/`, registers the project, starts the watch daemon
+- Creates `memory-graph/`, registers the project, installs the index watcher unit
 - Adds `.basic-memory/` to `.gitignore`
 
 **Optional cleanup** after migration:
@@ -220,4 +246,4 @@ The v0.2.0 memory skill README and hooks used `understand`/`get_concept` — v0.
 
 ## First implementation
 
-Part of the [Beings Protocol](https://github.com/VeltriaAI/beings-protocol) — giving AI Beings persistent identity, memory, and soul.
+Part of the [Beings Protocol](https://github.com/NaturNestAI-Labs/beings-protocol) — giving AI Beings persistent identity, memory, and soul.

@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""kit-broker serve --socket <path> --class ai|team --peer-uid <uid>[,<uid>] [--chat <chatId>] [--allow-raw-jobs] [--dry]
+   kit-broker check <class> <verb> [args...]: validation only. The model run's only way to the kit (isolation/README.md)."""
+import base64, json, os, pwd, re, shutil, socket, socketserver, struct, subprocess, sys, tempfile, threading
+
+KIT = os.path.dirname(os.path.realpath(__file__))
+HIVE_MCP = os.environ.get("BEING_HIVE_MCP", os.path.expanduser("~/.local/bin/hive-mcp"))
+HIVE_AS = os.environ.get("BEING_HIVE_AS") or (os.environ.get("BEING_NAME", "being").lower() + "-box")
+MAX_HEADER = 32 << 20          # attachments travel in the header
+MAX_ARGS, MAX_ARG = 64, 64 << 10
+
+# verb → (argv prefix relative to the kit, classes, path-in flags {flag: "list" | "cid"}, path-out flags)
+VERBS = {
+    "teams-send-dm":          (["node", "teams-send-dm.mjs"], {"ai", "team"}, (), ()),
+    "teams-fetch-attachment": (["node", "teams-fetch-attachment.mjs"], {"ai", "team"}, (), ("--out",)),
+    "mail":                   (["node", "mail.mjs"], {"ai"}, {"--attach": "list", "--inline": "cid"}, ("--save",)),
+    "draft-for-owner":        (["node", "draft-for-owner.mjs"], {"ai"}, {"--attach": "list"}, ()),
+    "owner-read":             (["./owner-read"], {"ai"}, (), ()),
+    "owner-mail":             (["./owner-mail"], {"ai"}, (), ()),
+    "being-job":              (["./being-job"], {"ai", "team"}, (), ()),
+    "being-status":           (["./being-status"], {"ai", "team"}, (), ()),
+    "being-blocker":          (["./being-blocker"], {"ai", "team"}, (), ()),
+    "being-board":            (["./being-board"], {"ai", "team"}, (), ()),
+    "being-steer":            (["./being-steer"], {"ai", "team"}, (), ()),
+    "being-sessions":         (["./being-sessions"], {"ai"}, (), ()),
+    "hive-mcp":               ([HIVE_MCP, "--as", HIVE_AS], {"ai"}, (), ()),
+    "ping":                   (None, {"ai", "team"}, (), ()),
+}
+TEAM_JOB_SUBCMDS = {"agent", "list", "status", "log"}
+# Flags that name a file: refused unless the verb declares them, so a new one cannot carry a raw host path through.
+PATHY = re.compile(r"--(?:attach|inline|file|files|path|paths|in|input|out|output|save|dir|from-file|body-file|cache|msgs|transcript)")
+CID = re.compile(r"[A-Za-z0-9._@-]{1,100}")
+
+
+class Refused(Exception):
+    pass
+
+
+def split_flags(verb, args):
+    """--flag=VALUE → --flag VALUE for file flags (the client does the same, so file indexes match); unknown file flags refused."""
+    _, _, fin, fout = VERBS[verb]
+    out = []
+    for i, a in enumerate(args):
+        flag = a.split("=", 1)[0]
+        if not PATHY.fullmatch(flag): out.append(a); continue
+        if flag not in fin and flag not in fout: raise Refused(f"{flag}: not a file flag of {verb}")
+        out += [flag, a.split("=", 1)[1]] if "=" in a else [a]
+    if out and out[-1] in fin: raise Refused(f"{out[-1]} needs a value")
+    return out
+
+
+def validate(cls, verb, args, chat="", allow_raw_jobs=False):
+    """The argv to run for this caller class, or Refused. Pure: no I/O (kit-broker check uses it)."""
+    if verb not in VERBS: raise Refused(f"unknown verb {verb!r}")
+    prefix, classes, _, _ = VERBS[verb]
+    if cls not in classes: raise Refused(f"{verb} is not available to {cls} runs")
+    if not isinstance(args, list) or len(args) > MAX_ARGS: raise Refused("bad argument list")
+    for a in args:
+        if not isinstance(a, str) or "\0" in a or len(a) > MAX_ARG: raise Refused("bad argument")
+    args = split_flags(verb, args)
+    if verb == "being-job":
+        sub = args[0] if args else "list"
+        if sub == "run" and not allow_raw_jobs:
+            raise Refused("being-job run executes as the kit user here; it needs the wired launcher (isolation/README)")
+        if sub == "codex" and not allow_raw_jobs:
+            raise Refused("being-job codex runs as the kit user until being-job launches it through being-launch")
+        if cls == "team" and sub not in TEAM_JOB_SUBCMDS: raise Refused(f"being-job {sub} is not available to teammate runs")
+        if cls == "team" and "--network" in args: raise Refused("no network jobs from teammate runs")
+    if verb == "being-status" and cls == "team":
+        if not chat: raise Refused("team broker without a chat")
+        args = ["--chat", chat]                       # a teammate sees its own chat's state, whatever it asked for
+    if verb == "hive-mcp":
+        args = []                                     # the identity is the broker's, never the caller's
+    if prefix is None: return None
+    return prefix + args
+
+
+class Handler(socketserver.BaseRequestHandler):
+    def send(self, t, data):
+        with self.wlock:
+            self.request.sendall(t + struct.pack(">I", len(data)) + data)
+
+    def recv_exact(self, n):
+        b = b""
+        while len(b) < n:
+            c = self.request.recv(n - len(b))
+            if not c: raise EOFError
+            b += c
+        return b
+
+    def frame(self):
+        h = self.recv_exact(5)
+        t, n = h[:1], struct.unpack(">I", h[1:])[0]
+        if n > MAX_HEADER: raise Refused("frame too large")
+        return t, self.recv_exact(n)
+
+    def handle(self):
+        self.wlock = threading.Lock()
+        srv = self.server
+        uid = struct.unpack("3i", self.request.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))[1]
+        tmp = None
+        try:
+            if uid not in srv.peer_uids: raise Refused(f"peer uid {uid} not allowed on this socket")
+            t, body = self.frame()
+            if t != b"H": raise Refused("expected a header")
+            req = json.loads(body)
+            verb, args = req.get("verb"), req.get("args") or []
+            argv = validate(srv.cls, verb, args, srv.chat, srv.allow_raw_jobs)
+            if argv is None:
+                self.send(b"O", f"pong {srv.cls} {srv.chat or ''}\n".encode()); self.send(b"X", b'{"rc":0}'); return
+            _, _, fin, fout = VERBS[verb]
+            tmp = tempfile.mkdtemp(prefix="kit-broker-")
+            argv = self.rewrite_paths(argv, len(VERBS[verb][0]), req.get("files_in") or {}, fin, fout, tmp)
+            self.log(f"{srv.cls} uid={uid} {verb} {json.dumps(argv[len(VERBS[verb][0]):])[:300]}")
+            rc = self.dry_run(argv) if srv.dry else self.run(argv)
+            outd = os.path.join(tmp, "out")
+            if os.path.isdir(outd):
+                for name in sorted(os.listdir(outd)):
+                    p = os.path.join(outd, name)
+                    if os.path.isfile(p) and not os.path.islink(p):
+                        self.send(b"F", json.dumps({"name": name, "b64": base64.b64encode(open(p, "rb").read()).decode()}).encode())
+            self.send(b"X", json.dumps({"rc": rc, "tmp": outd}).encode())
+        except Refused as e:
+            self.log(f"{srv.cls} uid={uid} REFUSED {e}")
+            try: self.send(b"R", f"kit-broker: refused: {e}\n".encode()); self.send(b"X", b'{"rc":3}')
+            except OSError: pass
+        except (EOFError, OSError, ValueError) as e:
+            self.log(f"{srv.cls} uid={uid} error {e!r}")
+        finally:
+            self.finish_conn()
+            if tmp: shutil.rmtree(tmp, ignore_errors=True)
+
+    def finish_conn(self):
+        """Half-close, then read whatever the caller still sends until it closes: closing a socket with unread input
+        resets it, and the caller would lose the answer (refusals, commands that ignore stdin)."""
+        try: self.request.shutdown(socket.SHUT_WR)
+        except OSError: return
+        f = getattr(self, "feeder", None)
+        if f is not None and f.is_alive(): f.join(5); return
+        self.request.settimeout(5)
+        try:
+            while self.request.recv(65536): pass
+        except OSError: pass
+
+    def rewrite_paths(self, argv, plen, files_in, fin, fout, tmp):
+        argv = list(argv)
+        for i in range(plen, len(argv)):
+            prev = argv[i - 1] if i > plen else ""
+            if prev in fin:
+                got = files_in.get(str(i - plen))
+                if not got or not isinstance(got, list): raise Refused(f"{prev}: attach files through the client (bytes), not as paths")
+                ind = os.path.join(tmp, "in", str(i)); os.makedirs(ind)
+                paths = []
+                for n, f in enumerate(got):
+                    name = re.sub(r"[,=]", "_", os.path.basename(str(f.get("name") or "file"))) or "file"
+                    if name in (".", ".."): raise Refused("bad file name")
+                    os.makedirs(os.path.join(ind, str(n))); p = os.path.join(ind, str(n), name)
+                    with open(p, "wb") as fh: fh.write(base64.b64decode(f.get("b64") or ""))
+                    if fin[prev] == "cid":
+                        if not CID.fullmatch(str(f.get("cid") or "")): raise Refused(f"{prev}: bad content id")
+                        p += "=" + f["cid"]
+                    paths.append(p)
+                argv[i] = ",".join(paths)
+            elif prev in fout:
+                argv[i] = os.path.join(tmp, "out")
+                os.makedirs(argv[i], exist_ok=True)
+        if "teams-fetch-attachment.mjs" in argv[:2] and "--out" not in argv:   # default dir is kit state: send it back instead
+            os.makedirs(os.path.join(tmp, "out"), exist_ok=True); argv += ["--out", os.path.join(tmp, "out")]
+        return argv
+
+    def run(self, argv):
+        p = subprocess.Popen(argv, cwd=KIT, env=self.server.child_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, start_new_session=True)
+        def pump(src, t):
+            for chunk in iter(lambda: src.read1(65536), b""):
+                try: self.send(t, chunk)
+                except OSError: break
+        ts = [threading.Thread(target=pump, args=(p.stdout, b"O"), daemon=True),
+              threading.Thread(target=pump, args=(p.stderr, b"R"), daemon=True)]
+        for t in ts: t.start()
+        def feed():
+            try:
+                while True:
+                    t, data = self.frame()
+                    if t == b"I": p.stdin.write(data); p.stdin.flush()
+                    elif t == b"E": break
+            except (EOFError, OSError, Refused):
+                pass
+            finally:
+                # Close the child's stdin FIRST: the caller only closes after the child's answer, and the child
+                # only answers after stdin EOF, so draining before closing deadlocked every real send from a teammate lane.
+                try: p.stdin.close()
+                except OSError: pass
+                try:   # then keep reading until the caller closes, so finish_conn() can close cleanly
+                    while self.request.recv(65536): pass
+                except OSError: pass
+        self.feeder = threading.Thread(target=feed, daemon=True); self.feeder.start()
+        rc = p.wait()
+        for t in ts: t.join(5)
+        return rc
+
+    def dry_run(self, argv):
+        """--dry (live checks, tests): validate and log exactly what would run, with the start of its stdin; run nothing."""
+        data = b""
+        try:
+            while True:
+                t, d = self.frame()
+                if t == b"I": data += d[: 4096 - len(data)]
+                elif t == b"E": break
+        except (EOFError, OSError, Refused):
+            pass
+        self.log(f"DRY would run {json.dumps(argv)[:600]} stdin={data[:600].decode('utf-8', 'replace')!r}")
+        self.send(b"O", b"kit-broker: dry run, nothing sent\n")
+        return 0
+
+    def log(self, msg):
+        if self.server.logf:
+            with open(self.server.logf, "a") as f: f.write(f"{os.getpid()} {msg}\n")
+
+
+class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+
+def child_env(cls, chat):
+    """The kit command's environment: the broker's own (set by the kit), never the caller's."""
+    env = {k: v for k, v in os.environ.items()}
+    env["BEING_STEER_CMD"] = "/bin/false"   # live relay would start a model as the kit user: notes go the durable way
+    if cls == "team":
+        tok = subprocess.run(["node", os.path.join(KIT, "scope.mjs"), "mint", f"chats:{chat}", "12"], capture_output=True,
+                             text=True, cwd=KIT)
+        if tok.returncode: sys.exit(f"kit-broker: could not mint the team grant: {tok.stderr.strip()}")
+        env["BEING_SEND_TOKEN"] = tok.stdout.strip(); env["BEING_LANE"] = f"team:{chat}"
+    return env
+
+
+def serve(a):
+    import argparse
+    ap = argparse.ArgumentParser(prog="kit-broker serve")
+    ap.add_argument("--socket", required=True); ap.add_argument("--class", dest="cls", choices=("ai", "team"), required=True)
+    ap.add_argument("--peer-uid", required=True); ap.add_argument("--chat", default="")
+    ap.add_argument("--acl-user", default=""); ap.add_argument("--log", default="")
+    ap.add_argument("--allow-raw-jobs", action="store_true"); ap.add_argument("--dry", action="store_true")
+    o = ap.parse_args(a)
+    if o.cls == "team" and not o.chat: sys.exit("kit-broker: --class team needs --chat")
+    env = child_env(o.cls, o.chat)
+    try: os.unlink(o.socket)
+    except FileNotFoundError: pass
+    old = os.umask(0o177)
+    srv = Server(o.socket, Handler)
+    os.umask(old)
+    if o.acl_user:   # the model user may connect; nobody else (the socket is 0600 + one ACL entry)
+        subprocess.run(["setfacl", "-m", f"u:{o.acl_user}:rw", o.socket], check=True)
+    srv.cls, srv.chat, srv.allow_raw_jobs, srv.child_env, srv.dry = o.cls, o.chat, o.allow_raw_jobs, env, o.dry
+    srv.peer_uids = {int(u) for u in o.peer_uid.split(",") if u}
+    srv.logf = o.log or os.path.join(os.environ.get("BEING_STATE_DIR", "/tmp"), "broker.log")
+    print("ready", flush=True)
+    try: srv.serve_forever()
+    finally:
+        if o.cls == "team" and env.get("BEING_SEND_TOKEN"):
+            subprocess.run(["node", os.path.join(KIT, "scope.mjs"), "revoke"], input=env["BEING_SEND_TOKEN"], text=True, cwd=KIT)
+        try: os.unlink(o.socket)
+        except OSError: pass
+
+
+if __name__ == "__main__":
+    a = sys.argv[1:]
+    if a[:1] == ["serve"]:
+        import signal
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        serve(a[1:])
+    elif a[:1] == ["check"] and len(a) >= 3:
+        try:
+            argv = validate(a[1], a[2], a[3:], chat="CHAT" if a[1] == "team" else "")
+            print(json.dumps(argv)); sys.exit(0)
+        except Refused as e:
+            print(f"refused: {e}", file=sys.stderr); sys.exit(3)
+    else:
+        print(__doc__, file=sys.stderr); sys.exit(2)

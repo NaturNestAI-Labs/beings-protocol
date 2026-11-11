@@ -1,0 +1,16 @@
+# Template: being-tunnel create writes this on the Being's box as ~/.config/systemd/user/cloudflared-@BEING_NAME@.service.
+# The token is read from a 0600 file, never from the command line (ps shows argv to every user).
+[Unit]
+Description=Cloudflare tunnel connector for @BEING_NAME@
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env cloudflared tunnel --no-autoupdate run --token-file @TOKEN_FILE@
+Restart=always
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=default.target

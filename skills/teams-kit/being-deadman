@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""being-deadman [--dry-run | --test-alert]: out-of-band health check of the Teams loop, run by its own timer.
+Alert channels are set in ~/.config/being-alert/alert.env (README "Script notes")."""
+import json, os, subprocess, sys, time, urllib.parse, urllib.request
+from datetime import datetime
+
+KIT = os.path.dirname(os.path.realpath(__file__))
+if os.path.exists(os.path.join(KIT, ".env")):
+    for l in open(os.path.join(KIT, ".env")):
+        k, _, v = l.split("#", 1)[0].strip().partition("=")
+        if k and v.strip(): os.environ.setdefault(k, v.strip())
+ALERT_ENV = os.path.expanduser(os.environ.get("BEING_ALERT_ENV", "~/.config/being-alert/alert.env"))
+if os.path.exists(ALERT_ENV):
+    for l in open(ALERT_ENV):
+        k, _, v = l.split("#", 1)[0].strip().partition("=")
+        if k and v.strip(): os.environ.setdefault(k, v.strip().strip('"'))
+STATE = os.environ.get("BEING_STATE_DIR") or sys.exit("BEING_STATE_DIR not set")
+NAME = os.environ.get("BEING_NAME", "Being")
+UNIT = f"{NAME}-teams.service"
+HOOK = os.path.expanduser(os.environ.get("HOOK_STATE") or "~/.local/state/graph-webhook")
+WM_MAX = int(os.environ.get("BEING_DEADMAN_WATERMARK_MIN", "10")) * 60
+LOG_MAX = int(os.environ.get("BEING_DEADMAN_LOG_MIN", "180")) * 60
+REMIND = int(os.environ.get("BEING_DEADMAN_REMIND_MIN", "120")) * 60
+OUT = os.path.join(STATE, "deadman.json")
+DRY = "--dry-run" in sys.argv
+
+def age(p):
+    try: return time.time() - os.path.getmtime(p)
+    except OSError: return None
+
+def mins(s): return f"{int(s // 60)} min" if s is not None else "never"
+
+def checks():
+    """[(key, problem text)] for everything wrong now."""
+    bad = []
+    if os.path.exists(os.path.join(STATE, "STANDBY")): return bad   # a standby copy is idle on purpose
+    if os.environ.get("BEING_DEADMAN_SKIP_UNIT") != "1":
+        r = subprocess.run(["systemctl", "--user", "is-active", UNIT], capture_output=True, text=True)
+        if r.stdout.strip() != "active": bad.append(("unit", f"{UNIT} is {r.stdout.strip() or 'unknown'}"))
+    a = age(os.path.join(STATE, "watermark"))
+    if a is None or a > WM_MAX: bad.append(("watermark", f"no successful Teams sweep for {mins(a)} (Graph sign-in or the loop)"))
+    a = age(os.path.join(STATE, "loop.log"))
+    if a is None or a > LOG_MAX: bad.append(("loop-log", f"loop.log silent for {mins(a)}"))
+    hf = os.path.join(HOOK, "health")
+    try:
+        h = open(hf).read().split()
+        if not h or h[0] != "ok": bad.append(("webhook", f"Graph webhook subscription: {' '.join(h[:1] + h[2:])[:120] or 'unknown'}"))
+    except OSError: pass   # no webhook on this host: the poll alone
+    try:
+        r = subprocess.run([sys.executable, os.path.join(KIT, "being-retry"), "--json"], capture_output=True, text=True, timeout=20)
+        c = json.loads(r.stdout)
+        waiting = c["failedNew"] + c["retryWaiting"] + c["outboxFailed"]
+        if waiting: bad.append(("failed", f"{waiting} failed item(s) waiting for retry"))
+    except Exception as e: bad.append(("retry-stage", f"being-retry unreadable: {e}"[:150]))
+    return bad
+
+def send_teams(text):
+    try:
+        r = subprocess.run(["node", os.path.join(KIT, "teams-send-dm.mjs"), "--verbatim"], input=f"<p>{text}</p>",
+                           capture_output=True, text=True, timeout=60, cwd=KIT)
+        return r.returncode == 0
+    except Exception: return False
+
+def send_external(text):
+    ch = os.environ.get("BEING_ALERT_CHANNEL", "none")
+    try:
+        if ch == "ntfy" and os.environ.get("NTFY_URL"):
+            urllib.request.urlopen(urllib.request.Request(os.environ["NTFY_URL"], data=text.encode(),
+                                   headers={"Title": f"{NAME} alert", "Priority": "high"}), timeout=15); return True
+        if ch == "telegram" and os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"):
+            u = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage"
+            d = urllib.parse.urlencode({"chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": text}).encode()
+            urllib.request.urlopen(u, data=d, timeout=15); return True
+        if ch == "command" and os.environ.get("BEING_ALERT_COMMAND"):
+            return subprocess.run([os.environ["BEING_ALERT_COMMAND"]], input=text, text=True, timeout=30).returncode == 0
+    except Exception as e:
+        print(f"external alert failed ({ch}): {e}", file=sys.stderr)
+    return False   # none / not configured
+
+def notify(text):
+    """Every configured channel; the result says which got it."""
+    import html
+    return {"external": send_external(text), "teams": send_teams(html.escape(text))}
+
+def ping():
+    u = os.environ.get("BEING_ALERT_PING_URL")
+    if u:
+        try: urllib.request.urlopen(u, timeout=10)
+        except Exception as e: print(f"ping failed: {e}", file=sys.stderr)
+
+def main():
+    if "--test-alert" in sys.argv:
+        print(json.dumps(notify(f"{NAME}: test alert from being-deadman at {datetime.now():%H:%M}. If you see this, the channel works.")))
+        return 0
+    try: prev = json.load(open(OUT))
+    except (OSError, ValueError): prev = {}
+    now = time.time(); bad = checks()
+    keys = sorted(k for k, _ in bad)
+    res = {"at": datetime.now().astimezone().isoformat(timespec="seconds"), "ok": not bad, "problems": [t for _, t in bad],
+           "keys": keys, "channel": os.environ.get("BEING_ALERT_CHANNEL", "none"),
+           "alertedAt": prev.get("alertedAt"), "alertedKeys": prev.get("alertedKeys", []), "lastSent": prev.get("lastSent")}
+    msg = None
+    if bad and (keys != prev.get("alertedKeys") or now - (prev.get("alertedAt") or 0) > REMIND):
+        msg = f"🚨 {NAME} health: " + "; ".join(t for _, t in bad)
+    elif not bad and prev.get("alertedKeys"):
+        msg = f"✅ {NAME} health: back to normal (was: {', '.join(prev['alertedKeys'])})"
+    if DRY:
+        print(json.dumps({**res, "wouldSend": msg}, indent=1)); return 0 if not bad else 1
+    if msg:
+        sent = notify(msg)
+        res["lastSent"] = {"text": msg, "at": res["at"], **sent}
+        # Counted as alerted only once some channel took it; otherwise the next run (5 min) tries again.
+        if any(sent.values()): res.update(alertedAt=now if bad else None, alertedKeys=keys if bad else [])
+    if not bad: ping()
+    t = f"{OUT}.tmp"; json.dump(res, open(t, "w"), indent=1); os.replace(t, OUT)
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

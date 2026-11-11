@@ -1,0 +1,42 @@
+# Files installed by install.sh --with owner-access over curl (path, or path +x). Keep in sync with git: tests/kit-audit.test.sh.
+README.md
+SKILL.md
+batches.test.mjs
+browser-route.mjs
+browser-route.test.mjs
+channel-lib.mjs
+channel-posts.mjs
+doctor.test.mjs
+forward-rules.mjs
+forward-rules.test.mjs
+gate.test.mjs
+go-approval.mjs
+go-approval.test.mjs
+guards.mjs
+guards.test.mjs
+kit-install.sh +x
+ledger.mjs
+ledger.test.mjs
+mail-forward-rules.mjs
+mailbox-lib.mjs
+manifest-set.mjs
+manifest-set.test.mjs
+oa-config.mjs
+oa-config.test.mjs
+oa-env.mjs
+owner-access-doctor.mjs
+owner-access-login +x
+owner-access-run +x
+owner-access.toml.example
+owner-browser.mjs
+owner-session.mjs
+owner-web +x
+owner-web.mjs
+sessions.mjs
+sessions.test.mjs
+shared-inbox-job.md.example
+shared-inbox-monitor.mjs
+shared-inbox-monitor.sh +x
+shared-mailbox-drafts.mjs
+shared-send.test.mjs
+verify-upload.py

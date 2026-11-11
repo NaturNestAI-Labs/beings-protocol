@@ -1,0 +1,10 @@
+# Template: webhook/kit-install.sh writes this to ~/.config/systemd/user/ (@KIT@ = the Teams kit dir). Off until enabled.
+[Unit]
+Description=Renew the Graph subscription when a lifecycle event arrives
+
+[Path]
+PathModified=@HOOK_STATE@/lifecycle.jsonl
+Unit=graph-subscribe-renew.service
+
+[Install]
+WantedBy=default.target

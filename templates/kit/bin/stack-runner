@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# {{APP}}: start and stop the {{APP}} stack on demand; nothing in it starts at boot. `{{APP}} help` for verbs.
+# {{APP_VAR}}_HOME picks the checkout or worktree; {{APP_VAR}}_COMPOSE, {{APP_VAR}}_ENV, {{APP_VAR}}_URL override the rest.
+set -euo pipefail
+APP="{{APP}}"
+PROJECT="{{PROJECT}}"   # one runner per compose project, so the fleet `down` really stops it
+DIR="${{{APP_VAR}}_HOME:-{{HOME}}}"
+COMPOSE="${{{APP_VAR}}_COMPOSE:-{{COMPOSE}}}"
+ENV_FILE="${{{APP_VAR}}_ENV:-{{ENV_FILE}}}"
+URL="${{{APP_VAR}}_URL:-{{URL}}}"
+
+compose() {
+  local args=(-p "$PROJECT" --project-directory "$DIR" -f "$DIR/$COMPOSE")
+  [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ] && args+=(--env-file "$ENV_FILE")
+  docker compose "${args[@]}" "$@"
+}
+ids() { docker ps -q "$@" --filter "label=com.docker.compose.project=$PROJECT"; }
+disarm() {   # never at boot, whatever the compose file says
+  local c; c="$(ids -a | tr '\n' ' ')"
+  [ -n "${c// /}" ] && docker update --restart=no $c >/dev/null
+  return 0
+}
+
+status() {
+  local n; n="$(ids | grep -c . || true)"
+  echo "$APP: $n running (project $PROJECT, home $DIR)"
+  docker ps -a --filter "label=com.docker.compose.project=$PROJECT" --format '  {{.Names}}\t{{.Status}}'
+  local armed
+  armed="$(ids -a | xargs -r docker inspect -f '{{.Name}} {{.HostConfig.RestartPolicy.Name}}' | awk '$2 != "no" && $2 != ""')"
+  [ -z "$armed" ] || { echo "  ! armed to start at boot (run: $APP up, or being stacks disarm):"; echo "$armed" | sed 's/^/    /'; }
+}
+
+down() {
+  # Stop must work even when the compose file or a secret is broken: fall back to the project label.
+  if [ -f "$DIR/$COMPOSE" ] && compose config -q >/dev/null 2>&1; then compose stop || true; fi
+  local c; c="$(ids | tr '\n' ' ')"
+  [ -n "${c// /}" ] && docker stop $c >/dev/null
+  echo "$APP: stopped"
+}
+
+case "${1:-status}" in
+  up)
+    [ -f "$DIR/$COMPOSE" ] || { echo "$APP: no $COMPOSE in $DIR (set {{APP_VAR}}_HOME)" >&2; exit 1; }
+    compose up -d; disarm; status ;;
+  down) down ;;
+  status) status ;;
+  restart) down; "$0" up ;;
+  logs) shift; compose logs -f --tail 200 "$@" ;;
+  open)
+    [ -n "$URL" ] || { echo "$APP: set {{APP_VAR}}_URL" >&2; exit 1; }
+    if command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL" >/dev/null 2>&1 & else echo "$URL"; fi ;;
+  destroy)
+    down; c="$(ids -a | tr '\n' ' ')"; [ -n "${c// /}" ] && docker rm $c >/dev/null; echo "$APP: containers removed (volumes kept)" ;;
+  reset)
+    read -r -p "This deletes all $APP data. Type '$APP' to confirm: " answer
+    [ "$answer" = "$APP" ] || { echo "aborted"; exit 1; }
+    "$0" destroy
+    v="$(docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT" | tr '\n' ' ')"
+    [ -n "${v// /}" ] && docker volume rm $v >/dev/null
+    echo "$APP: data wiped" ;;
+  -h|--help|help) echo "usage: $APP up|down|status|restart|logs [service]|open|destroy|reset"
+                  echo "  down stops (data kept), destroy removes containers, reset also wipes volumes after a typed confirmation" ;;
+  *) echo "usage: $APP up|down|status|restart|logs [service]|open|destroy|reset" >&2; exit 2 ;;
+esac

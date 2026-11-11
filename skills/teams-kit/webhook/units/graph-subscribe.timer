@@ -1,0 +1,11 @@
+# Template: webhook/kit-install.sh writes this to ~/.config/systemd/user/ (@KIT@ = the Teams kit dir). Off until enabled.
+[Unit]
+Description=Check the Graph subscription every 6 h
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

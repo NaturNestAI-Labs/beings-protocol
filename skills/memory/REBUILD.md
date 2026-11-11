@@ -5,40 +5,35 @@ With basic-memory, "rebuild" is dramatically simpler than it was with MegaMemory
 ## One-command rebuild
 
 ```bash
-basic-memory sync
+bin/being-bm-repair            # project defaults to the home's directory name
 ```
 
-That's it. basic-memory walks `memory-graph/`, parses every markdown file, and rebuilds the SQLite index at `~/.basic-memory/memory.db`.
+It walks `memory-graph/`, parses every markdown file, and rebuilds the SQLite index at `~/.basic-memory/`, using
+`basic-memory reindex --full` (current versions), `basic-memory sync` (older ones) or the sync service directly.
 
-For live reindexing (recommended for long-running Beings):
-
-```bash
-basic-memory sync --watch
-```
-
-This starts a daemon that watches `memory-graph/` via fsevents/inotify and reindexes any file change in milliseconds.
+For live reindexing, the index watcher runs as a user unit (`bin/being-memory-index install`); see README.md.
 
 ## When to rebuild
 
 ### New machine
-First install on a fresh machine. No `~/.basic-memory/memory.db` yet. Install basic-memory, register the project, and run `basic-memory sync`. Your committed `memory-graph/` markdown files populate the index.
+First install on a fresh machine. No `~/.basic-memory/memory.db` yet. Install basic-memory, register the project, and run `bin/being-bm-repair`. Your committed `memory-graph/` markdown files populate the index.
 
 ### After `git pull`
-If the watch daemon is running, external file changes (from `git pull`, from Obsidian, from manual edits) are picked up automatically within milliseconds. If the daemon isn't running, run `basic-memory sync` once to catch up.
+If the index watcher is running, external file changes (from `git pull`, from Obsidian, from manual edits) are picked up automatically. If it isn't, run `bin/being-bm-repair` once to catch up.
 
 ### Cache corruption
-If `~/.basic-memory/memory.db` is corrupted or lost, delete it and re-run `basic-memory sync`. The markdown files in `memory-graph/` are untouched — the index rebuilds from them.
+If `~/.basic-memory/memory.db` is corrupted or lost, delete it and re-run `bin/being-bm-repair`. The markdown files in `memory-graph/` are untouched — the index rebuilds from them.
 
 ### Bulk external changes
-If you ran a script that wrote many markdown files, or you did a big manual edit session outside the running daemon, `basic-memory sync` forces a full reconciliation.
+If you ran a script that wrote many markdown files, or you did a big manual edit session outside the running watcher, `bin/being-bm-repair` forces a full reconciliation.
 
 ## User-triggered rebuild
 
 If you ask your Being to "rebuild your memory," it should:
 
-1. Check the watch daemon is running (`cat ~/.basic-memory/watch-status.json`)
-2. If not running, start it: `basic-memory sync --watch &`
-3. Force a one-shot sync: `basic-memory sync`
+1. Check the watcher is running (`systemctl --user status <project>-memory-index`)
+2. If not, start it: `bin/being-memory-index install`
+3. Force a full rebuild: `bin/being-bm-repair`
 4. Verify via `basic-memory tool recent-activity` or `search_notes`
 
 ## Seeding memory from identity files
@@ -60,7 +55,7 @@ Being:
   4. Reports what was seeded
 ```
 
-This is a one-time bootstrap. After it, ongoing sessions use hooks (PreCompact/Stop) to grow the graph organically.
+This is a one-time bootstrap. After it, the Being grows the graph during work and in its session-end summary.
 
 ## Safety
 

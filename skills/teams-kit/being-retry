@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""being-retry [run|status]: failed work and sends get up to BEING_RETRY_MAX tries with backoff, then one alert.
+   run = one pass (every loop tick); status = one line of counts. Details: README "Script notes"."""
+import fcntl, glob, hashlib, json, os, subprocess, sys, time
+from datetime import datetime
+
+KIT = os.path.dirname(os.path.realpath(__file__))
+if os.path.exists(os.path.join(KIT, ".env")):   # standalone too: fill missing settings from the kit's .env
+    for l in open(os.path.join(KIT, ".env")):
+        k, _, v = l.split("#", 1)[0].strip().partition("=")
+        if k and v.strip(): os.environ.setdefault(k, v.strip())
+STATE = os.environ.get("BEING_STATE_DIR") or sys.exit("BEING_STATE_DIR not set")
+MAX = int(os.environ.get("BEING_RETRY_MAX", "3"))
+BACKOFF = [int(x) for x in os.environ.get("BEING_RETRY_BACKOFF_SEC", "120,600,1800").split(",")]
+NO_RETRY_EXITS = {2, 3}   # usage error, refused (secret filter / scope): the same text fails the same way again
+P = lambda *a: os.path.join(STATE, *a)
+FAILED, PENDING, HANDLED = P("failed.jsonl"), P("retry.json"), P("failed-handled.jsonl")
+OB = P("outbox")
+now = time.time
+iso = lambda: datetime.now().astimezone().isoformat(timespec="seconds")
+
+def key_of(m):
+    k = m.get("messageId") or m.get("jobId")
+    return str(k) if k else "sha1:" + hashlib.sha1(json.dumps(m, sort_keys=True).encode()).hexdigest()[:16]
+
+def handled_keys():
+    ks = set()
+    if os.path.exists(HANDLED):
+        for l in open(HANDLED):
+            try: m = json.loads(l)
+            except ValueError: continue
+            ks.add(m.get("retryKey") or key_of(m))
+    return ks
+
+def load(path, default):
+    try: return json.load(open(path))
+    except (OSError, ValueError): return default
+
+def save(path, d):
+    t = f"{path}.tmp.{os.getpid()}"; json.dump(d, open(t, "w"), indent=1); os.replace(t, path)
+
+def backoff(n):   # wait before attempt n+1, after n attempts
+    return BACKOFF[min(n - 1, len(BACKOFF) - 1)] if n >= 1 else 0
+
+def send_owner(line):
+    """One short line to the owner's 1:1 (the notify chat); never raises."""
+    try:
+        r = subprocess.run(["node", os.path.join(KIT, "teams-send-dm.mjs"), "--verbatim"], input=f"<p>{line}</p>",
+                           text=True, capture_output=True, timeout=60, cwd=KIT)
+        return r.returncode == 0
+    except Exception: return False
+
+def give_up(kind, what, err):
+    """Record a blocker (being-status shows it) and tell the owner once, in one line."""
+    with open(P("blockers.jsonl"), "a") as f:
+        f.write(json.dumps({"at": iso(), "task": f"retry: {kind} {what}", "error": err[:300],
+                            "need": "a look; automatic retries are used up", "source": "being-retry"}) + "\n")
+    import html
+    if os.environ.get("BEING_RETRY_NOTIFY", "1") == "1":
+        send_owner(html.escape(f"⚠️ Gave up after {MAX} tries: {kind} {what} ({err[:120]}). Details: being-status."))
+
+def answered(m):
+    """A real reply that quotes this message (an outgoing message, not a triage ack) in its chat's comms record, or None.
+    A retry must not replay a message another session already answered. The chat's conversation file first (comms-log.mjs), else the global log."""
+    chat, mid = m.get("chatId"), m.get("messageId")
+    if not chat or not mid or m.get("addressedBy") == "note" or m.get("lane") == "job": return None
+    import re
+    conv = P("conversations", re.sub(r"[^A-Za-z0-9._@-]", "_", chat)[:150] + ".jsonl")
+    src = conv if os.path.exists(conv) else (os.environ.get("BEING_COMMS_LOG") or P("comms.jsonl"))
+    try:
+        for l in open(src):
+            try: e = json.loads(l)
+            except ValueError: continue
+            if e.get("chatId") == chat and e.get("dir") == "out" and e.get("kind", "message") == "message" and str(e.get("replyTo")) == str(mid):
+                return e
+    except OSError:
+        pass
+    return None
+
+def settle_answered(k, m, r):
+    open(HANDLED, "a").write(json.dumps({**m, "retryKey": k, "answeredBy": r.get("messageId"), "settledAt": iso()}) + "\n")
+
+def preview(m):
+    if m.get("lane") == "job": return f"job result {m.get('name') or m.get('jobId')}"
+    return f"{'note' if m.get('addressedBy') == 'note' else 'message'} from {m.get('from', '?')}: “{(m.get('text') or '')[:60]}”"
+
+def work_pass():
+    """failed.jsonl → retry.json (attempt counts) → work.jsonl when due. Returns how many were re-queued."""
+    pend = load(PENDING, {})
+    done = handled_keys()
+    # Atomic claim of the current failures: writers append with >>, so a rename never loses a line.
+    claim = P(f"failed.claim.{os.getpid()}")
+    try: os.rename(FAILED, claim)
+    except FileNotFoundError: claim = None
+    if claim:
+        for l in open(claim):
+            if not l.strip(): continue
+            try: m = json.loads(l)
+            except ValueError:
+                open(HANDLED, "a").write(json.dumps({"raw": l.strip()[:2000], "retryKey": "bad-line", "gaveUpAt": iso()}) + "\n"); continue
+            k = key_of(m)
+            if k in done: continue   # handled by hand or already given up: never replayed
+            r = answered(m)
+            if r: settle_answered(k, m, r); pend.pop(k, None); continue   # answered meanwhile: nothing to retry
+            e = pend.get(k) or {"item": m, "attempts": 1, "firstFailedAt": iso()}
+            e["item"] = {x: y for x, y in m.items() if x not in ("retry",)}
+            e.update(lastFailedAt=iso(), due=now() + backoff(e["attempts"]), state="waiting")
+            if e["attempts"] >= MAX:
+                open(HANDLED, "a").write(json.dumps({**e["item"], "retryKey": k, "attempts": e["attempts"], "gaveUpAt": iso()}) + "\n")
+                pend.pop(k, None)
+                give_up("work", preview(m), f"failed {e['attempts']}x, last at {e['lastFailedAt'][11:16]}")
+                continue
+            pend[k] = e
+        os.remove(claim)
+    requeued = []
+    for k, e in list(pend.items()):
+        if k in done: pend.pop(k); continue
+        if e.get("state") == "queued":
+            # A re-queued item that did not come back within a day succeeded: forget it.
+            if now() - e.get("queuedAt", 0) > 86400: pend.pop(k)
+            continue
+        if now() < e.get("due", 0): continue
+        r = answered(e["item"])
+        if r: settle_answered(k, e["item"], r); pend.pop(k); continue
+        e["attempts"] += 1; e.update(state="queued", queuedAt=now())
+        requeued.append(json.dumps({**e["item"], "retry": e["attempts"]}) + "\n")
+    if requeued:
+        with open(P("work-queue.lock"), "a") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            with open(P("work.jsonl"), "a") as w: w.writelines(requeued)
+    save(PENDING, pend)
+    return len(requeued)
+
+def outbox_pass():
+    """outbox/failed/*.json → back into outbox/ with an attempt count (exit 2/3 are final), or outbox/dead/ after MAX."""
+    n = 0
+    for f in sorted(glob.glob(os.path.join(OB, "failed", "*.json"))):
+        try: it = json.load(open(f))
+        except (OSError, ValueError): continue
+        att = int(it.get("attempts", 1))
+        final = it.get("exit") in NO_RETRY_EXITS
+        if final or att >= MAX:
+            os.makedirs(os.path.join(OB, "dead"), exist_ok=True)
+            os.replace(f, os.path.join(OB, "dead", os.path.basename(f)))
+            give_up("send", f"to chat …{str(it.get('chatId', ''))[-12:]}",
+                    f"exit {it.get('exit')}" + (" (refused, not retried)" if final else f" after {att} tries"))
+            continue
+        if now() - os.path.getmtime(f) < backoff(att): continue
+        item = {k: v for k, v in it.items() if k not in ("final", "how", "exit")}
+        item["attempts"] = att + 1
+        t = os.path.join(OB, f".{item['id']}.json.tmp"); json.dump(item, open(t, "w")); os.replace(t, os.path.join(OB, item["id"] + ".json"))
+        os.remove(f); n += 1
+    return n
+
+def counts():
+    pend = load(PENDING, {})
+    w = sum(1 for e in pend.values() if e.get("state") != "queued")
+    q = sum(1 for e in pend.values() if e.get("state") == "queued")
+    nf = sum(1 for l in open(FAILED) if l.strip()) if os.path.exists(FAILED) else 0
+    of = len(glob.glob(os.path.join(OB, "failed", "*.json")))
+    dead = len(glob.glob(os.path.join(OB, "dead", "*.json")))
+    gave = 0
+    if os.path.exists(HANDLED):
+        for l in open(HANDLED):
+            try: gave += 1 if json.loads(l).get("gaveUpAt") else 0
+            except ValueError: pass
+    return {"failedNew": nf, "retryWaiting": w, "retryInFlight": q, "outboxFailed": of, "outboxDead": dead, "gaveUp": gave}
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "run"
+    if cmd == "status":
+        c = counts()
+        print(f"failed work: {c['failedNew'] + c['retryWaiting']} waiting retry, {c['retryInFlight']} re-queued · "
+              f"failed sends: {c['outboxFailed']} · given up: {c['gaveUp']} work, {c['outboxDead']} sends")
+        return 0
+    if cmd == "--json": print(json.dumps(counts())); return 0
+    if cmd != "run": print(__doc__, file=sys.stderr); return 2
+    lk = open(P("retry.lock"), "a")
+    try: fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError: return 0
+    if not (os.path.exists(FAILED) or os.path.exists(PENDING) or glob.glob(os.path.join(OB, "failed", "*.json"))): return 0
+    w = work_pass(); o = outbox_pass()
+    if w or o: print(f"retry: {w} work item(s), {o} send(s) re-queued")
+    if w and os.environ.get("BEING_RETRY_DISPATCH", "1") == "1":
+        subprocess.Popen([os.path.join(KIT, "being-handle"), "work"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    if o and os.environ.get("BEING_RETRY_DISPATCH", "1") == "1":
+        subprocess.Popen([os.path.join(KIT, "being-handle"), "voice"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

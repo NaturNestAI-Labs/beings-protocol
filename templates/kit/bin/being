@@ -1,0 +1,560 @@
+#!/usr/bin/env bash
+# Multi-client launcher for a Being: Claude Code or Codex, always in the Being's home so CLAUDE.md / AGENTS.md load.
+# Install as <home>/bin/<name>; home comes from this file's real location, name from the kit .env (else the file name).
+set -euo pipefail
+
+SELF="$(readlink -f "$0")"
+WORKSPACE="$(cd "$(dirname "$SELF")/.." && pwd -P)"   # Claude keys sessions by the real path
+KIT="${BEING_KIT_HOME:-$WORKSPACE/ops/teams-kit}"
+# Same name as the handler (kit .env BEING_NAME) so "today" opens the session it feeds; else the file name.
+# shellcheck source=/dev/null
+NAME="$( [[ -f "$KIT/.env" ]] && { set -a; . "$KIT/.env" >/dev/null 2>&1; printf '%s' "${BEING_NAME:-}"; } || true)"
+NAME="${NAME:-$(basename "$SELF")}"
+enc() { printf '%s' "$1" | sed 's#[^A-Za-z0-9]#-#g'; }   # Claude Code's project-dir naming
+SESSION_DIR="$HOME/.claude/projects/$(enc "$WORKSPACE")"
+CONFIG_DIR="${BEING_CONFIG_DIR:-$HOME/.config/$NAME}"
+STATE_HOME="${BEING_LOCAL_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/$NAME}"
+STACKS_FILE="${BEING_STACKS_FILE:-$CONFIG_DIR/stacks.tsv}"
+CLAUDE_FLAGS=(); CODEX_FLAGS=()
+# Opt-in only: skip the clients' permission prompts and sandbox (trusted single-user host).
+if [[ "${BEING_SKIP_PERMISSIONS:-0}" == 1 ]]; then
+  CLAUDE_FLAGS=(--dangerously-skip-permissions); CODEX_FLAGS=(--dangerously-bypass-approvals-and-sandbox)
+fi
+CALLER_PWD="$PWD"
+cd "$WORKSPACE"
+
+# update: compare installed versions with a GitHub ref, print the newer changelog entries, then run install.sh --update.
+cmd_update() {
+  local ref="main" check=false yes=false base tmp lp lk rp rk comps
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --check) check=true ;; --yes|-y) yes=true ;; --ref) ref="${2:?--ref needs a tag or branch}"; shift ;;
+      *) echo "usage: $NAME update [--check] [--ref vX.Y.Z|branch] [--yes]" >&2; return 2 ;;
+    esac; shift
+  done
+  [[ $ref =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "bad ref: $ref" >&2; return 2; }
+  base="${BEINGS_BASE_URL:-https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/$ref}"
+  tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
+  curl -fsSL "$base/install.sh" -o "$tmp/install.sh" || { echo "cannot fetch $base/install.sh" >&2; return 1; }
+  curl -fsSL "$base/CHANGELOG.md" -o "$tmp/CHANGELOG.md" 2>/dev/null || : > "$tmp/CHANGELOG.md"
+  rp="$(sed -n 's/^PROTOCOL_VERSION="\(.*\)"/\1/p' "$tmp/install.sh" | head -1)"
+  rk="$(sed -n 's/^KIT_VERSION="\(.*\)"/\1/p' "$tmp/install.sh" | head -1)"
+  lp="$(cat "$WORKSPACE/.beings/.protocol-version" 2>/dev/null || echo 0.0.0)"
+  lk="$(cat "$WORKSPACE/.beings/.kit-version" 2>/dev/null || echo 0.0.0)"
+  echo "installed: protocol $lp, kit $lk"
+  echo "$ref: protocol ${rp:-?}, kit ${rk:-?}   (install.sh sha256 $({ sha256sum "$tmp/install.sh" 2>/dev/null || shasum -a 256 "$tmp/install.sh"; } | cut -c1-16))"
+  python3 - "$tmp/CHANGELOG.md" "$lp" <<'PY'
+import re, sys
+v = lambda s: tuple(int(x) for x in re.findall(r"\d+", s)[:3])
+have, show, out = v(sys.argv[2]), False, []
+for l in open(sys.argv[1], encoding="utf-8"):
+    m = re.match(r"^## \[(\d+\.\d+\.\d+)\]", l)
+    if m: show = v(m.group(1)) > have
+    if show: out.append(l.rstrip())
+print("\n".join(out) if out else "(no newer changelog entries)")
+PY
+  if [[ "$rp" == "$lp" && "$rk" == "$lk" ]]; then echo "up to date"; return 0; fi
+  $check && return 10
+  if ! $yes; then
+    [[ -t 0 ]] || { echo "not a terminal: re-run with --yes to apply" >&2; return 2; }
+    read -r -p "Update to protocol $rp, kit $rk? [y/N] " a; [[ $a == [yY]* ]] || return 1
+  fi
+  comps="$(cat "$WORKSPACE/.beings/.kit-components" 2>/dev/null || true)"
+  (cd "$WORKSPACE" && BEINGS_BASE_URL="$base" bash "$tmp/install.sh" --update --name "$NAME" ${comps:+--with "$comps"} --yes)
+  find "$WORKSPACE" -path '*/.kit-upgrade/CHANGES.txt' -not -path '*/node_modules/*' 2>/dev/null | while read -r f; do
+    grep -q 'LOCAL CHANGES' "$f" && { echo "merge by hand (local changes kept): $f"; grep 'LOCAL CHANGES' "$f" | sed 's/^/  /'; }
+  done
+  return 0
+}
+
+usage() {
+  cat <<EOF
+$NAME                        client picker
+$NAME claude [prompt|flags]  Claude Code (new sessions are named YYYY-MM-DD)
+$NAME claude continue | resume [#|id] | sessions [N] | today
+$NAME codex  [prompt|flags]  Codex
+$NAME codex  continue | resume [id] | today
+$NAME monitor [args]         live, read-only view of jobs and sessions (monitor component)
+$NAME access [--verify]      what the Being may use (being.toml [access]) and its four sign-in sessions
+$NAME login being|owner [--teams|--outlook|--web] [--scopes a,b]   sign in one session (default: Teams and Outlook)
+$NAME stacks [list|status|down|audit|disarm|add|remove]            all app stacks; nothing starts at boot
+$NAME stack new <app> [--home DIR] [--project P] [--compose F] [--url U] [--env F] [--shim] [--force]
+$NAME doctor                 health checks: guardrails, memory index size, backups, secrets folder, logins, stacks
+$NAME update [--check] [--ref vX.Y.Z|branch] [--yes]   pull the latest kit from GitHub: shows the changelog first;
+                             files you changed are never replaced (see .kit-upgrade/CHANGES.txt)
+"today" opens the daily session the Teams kit feeds (work session for Claude, triage session for Codex).
+BEING_SKIP_PERMISSIONS=1 skips the clients' permission prompts and sandbox (off by default).
+EOF
+}
+
+sessions() {   # newest first, sub-agent transcripts skipped
+  # ls -t, not find -printf: the same on GNU and BSD (macOS)
+  { cd "$SESSION_DIR" 2>/dev/null && ls -t -- *.jsonl 2>/dev/null || true; } | grep -v '^agent-' | sed 's/\.jsonl$//' || true
+}
+
+list_sessions() {
+  local i=1 sid f first
+  printf '  %-4s %-38s %s\n' '#' 'session' 'first message'
+  while read -r sid; do
+    (( i > ${1:-10} )) && break
+    f="$SESSION_DIR/$sid.jsonl"
+    first=$(grep -m1 '"role":"user"' "$f" 2>/dev/null | sed -n 's/.*"content":"\([^"]*\)".*/\1/p' | cut -c1-60 || true)
+    printf '  %-4s %-38s %s\n' "$i" "$sid" "${first:-(complex message)}"
+    i=$((i + 1))
+  done < <(sessions)
+}
+
+daily_sid() { python3 -c 'import uuid,sys; print(uuid.uuid5(uuid.NAMESPACE_URL, sys.argv[1]))' "being-daily/$NAME/$(date +%F)"; }
+
+has_name_flag() {
+  local a; for a in "$@"; do
+    case "$a" in -n|--name|--name=*|-r|--resume|--resume=*|-c|--continue|--session-id|--session-id=*) return 0 ;; esac
+  done; return 1
+}
+
+launch_claude() {
+  case "${1:-}" in
+    today|t) shift; local sid; sid=$(daily_sid)
+      if [[ -f "$SESSION_DIR/$sid.jsonl" ]]; then exec claude "${CLAUDE_FLAGS[@]}" --resume "$sid" "$@"; fi
+      exec claude "${CLAUDE_FLAGS[@]}" --name "$(date +%F)" --session-id "$sid" "$@" ;;
+    sessions|ls) list_sessions "${2:-10}" ;;
+    continue|c) shift; exec claude "${CLAUDE_FLAGS[@]}" --continue "$@" ;;
+    resume|r) shift
+      if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+        local sid; sid=$(sessions | sed -n "${1}p"); shift
+        [[ -n "$sid" ]] || { echo "no session at that number; try: $NAME claude sessions" >&2; exit 1; }
+        exec claude "${CLAUDE_FLAGS[@]}" --resume "$sid" "$@"
+      fi
+      exec claude "${CLAUDE_FLAGS[@]}" --resume "$@" ;;
+    *) if has_name_flag "$@"; then exec claude "${CLAUDE_FLAGS[@]}" "$@"; fi
+       exec claude "${CLAUDE_FLAGS[@]}" --name "$(date +%F)" "$@" ;;
+  esac
+}
+
+launch_codex() {
+  case "${1:-}" in
+    today|t) shift; local idf; idf="$KIT/state/fast-daily/$(date +%F).id"
+      [[ -s "$idf" ]] || { echo "no Codex triage session today yet (it opens with the first message)" >&2; exit 1; }
+      exec codex "${CODEX_FLAGS[@]}" resume "$(cat "$idf")" "$@" ;;
+    continue|c) shift; exec codex "${CODEX_FLAGS[@]}" resume --last "$@" ;;
+    resume|r) shift; exec codex "${CODEX_FLAGS[@]}" resume "$@" ;;
+    *) exec codex "${CODEX_FLAGS[@]}" "$@" ;;
+  esac
+}
+
+# ---- monitor ---------------------------------------------------------------
+cmd_monitor() {
+  local d="$WORKSPACE/ops/monitor" f
+  for f in being-monitor monitor; do [[ -x "$d/$f" ]] && exec "$d/$f" "$@"; done
+  [[ -f "$d/monitor.py" ]] && exec python3 "$d/monitor.py" "$@"
+  [[ -f "$d/monitor.mjs" ]] && exec node "$d/monitor.mjs" "$@"
+  echo "monitor is not installed; add it with: install.sh --update --with monitor" >&2; exit 1
+}
+
+# ---- config (being.toml) -----------------------------------------------------
+toml_file() { local f; for f in "${BEING_TOML:-}" "$WORKSPACE/being.toml" "$CONFIG_DIR/being.toml"; do [[ -n "$f" && -f "$f" ]] && { echo "$f"; return; }; done; }
+being_config() {
+  local tool; for tool in "$WORKSPACE/bin/being-config" "$(dirname "$SELF")/being-config"; do [[ -x "$tool" ]] && break; done
+  [[ -x "$tool" ]] || { echo "being-config not found (install.sh --update --with operations)" >&2; return 1; }
+  "$tool" "$@"
+}
+access_list() { local f; f="$(toml_file)"; [[ -n "$f" ]] && being_config "$f" list access; return 0; }
+
+# One line per access id (a function, not an associative array: macOS ships bash 3.2).
+access_info() {
+  case "$1" in
+    owner_chat) echo "Being | Teams 1:1 with the owner: read + send (required)" ;;
+    claude) echo "Being | Claude Code seat on this box" ;;
+    memory) echo "local | memory search: read + write notes" ;;
+    teammate_chats) echo "Being | Teams chats with teammates: reply in their own chat" ;;
+    group_chats) echo "Being | Teams group chats and channels: read + post" ;;
+    being_mail) echo "Being | its own mailbox: read + send" ;;
+    being_onedrive) echo "Being | its own OneDrive: upload + share by name" ;;
+    presence) echo "Being | Teams presence and photo" ;;
+    codex) echo "Being | Codex login on this box" ;;
+    owner_teams_read) echo "Owner | owner's Teams, read only" ;;
+    owner_teams_send) echo "Owner | owner's Teams, send after approval" ;;
+    owner_mail_read) echo "Owner | owner's mail, read only" ;;
+    owner_mail_send) echo "Owner | owner's mail, send after approval" ;;
+    owner_files) echo "Owner | owner's files (OneDrive, SharePoint), read only" ;;
+    owner_web) echo "Owner | owner's Outlook/Teams web pages, read only" ;;
+    shared_mailbox_read) echo "Owner | shared mailbox, read only" ;;
+    shared_mailbox_send) echo "Owner | shared mailbox drafts and reviewed batch send" ;;
+    owner_channel_posts) echo "Owner | posts in one named channel as the owner, after a go" ;;
+    mail_rules) echo "Owner | pre-approved mail forwarding rules" ;;
+    area_approvers) echo "- | named people who can say \"go\" for one area" ;;
+    github_being) echo "Being | own GitHub account or repo-limited token" ;;
+    github_owner) echo "Owner | owner's GitHub login (very high risk)" ;;
+    azure_devops) echo "either | Azure DevOps pipelines and work items" ;;
+    cloud_cli) echo "either | cloud CLIs (very high risk)" ;;
+    kubernetes) echo "key | named Kubernetes clusters (very high risk)" ;;
+    notion) echo "Being | Notion integration" ;;
+    tunnel) echo "admin key at setup | Cloudflare tunnel for the box" ;;
+    cloudflare_api) echo "Owner token | whole Cloudflare account (very high risk)" ;;
+    app_keys) echo "key | single-app keys from the key folder" ;;
+    model_hubs) echo "key | model hub downloads" ;;
+    model_proxy) echo "key | local model proxy" ;;
+    vpn) echo "key | VPN to private networks" ;;
+    device_sync) echo "owner's laptop | owner device sync" ;;
+    desktop) echo "owner's laptop | <being>-desktop" ;;
+    *) return 1 ;;
+  esac
+}
+
+# ---- sign-in sessions --------------------------------------------------------
+# Four separate MSAL caches: Being Teams, Being Outlook, Owner Teams, Owner Outlook. They never share a file.
+load_kit_env() {
+  [[ -f "$KIT/.env" ]] || { echo "no Teams kit .env at $KIT (install.sh --with teams-kit)" >&2; return 1; }
+  # shellcheck source=/dev/null
+  set -a; . "$KIT/.env"; set +a
+}
+session_cache() {   # session_cache <being|owner> <teams|outlook>
+  local base
+  case "$1/$2" in
+    being/teams) echo "${BEING_CACHE:-}" ;;
+    owner/teams) echo "${OWNER_CACHE:-}" ;;
+    being/outlook) base="${BEING_CACHE:-}"; echo "${BEING_MAIL_CACHE:-${base:+$(dirname "$base")/being-outlook-cache.json}}" ;;
+    owner/outlook) base="${OWNER_CACHE:-}"; echo "${OWNER_MAIL_CACHE:-${base:+$(dirname "$base")/owner-outlook-cache.json}}" ;;
+  esac
+}
+session_upn() { if [[ $1 == being ]]; then echo "${BEING_UPN:-}"; else echo "${OWNER_UPN:-}"; fi; }
+session_scopes() {
+  case "$1/$2" in
+    being/teams) echo "Chat.ReadWrite,ChatMessage.Send,Chat.Create,User.Read,Files.ReadWrite,Presence.ReadWrite" ;;
+    being/outlook|owner/outlook) echo "Mail.ReadWrite,Mail.Send,User.Read" ;;
+    owner/teams) echo "Chat.ReadWrite,ChatMessage.Send,User.Read" ;;
+  esac
+}
+caches_distinct() {
+  local seen="" s v c
+  for s in being/teams being/outlook owner/teams owner/outlook; do
+    c="$(session_cache "${s%/*}" "${s#*/}")"; [[ -n "$c" ]] || continue
+    v="$(readlink -m "$c")"
+    [[ "$seen" == *"|$v|"* ]] && { echo "REFUSED: two sessions share the cache $c; each needs its own file" >&2; return 1; }
+    seen="$seen|$v|"
+  done
+}
+stamp_file() { echo "$STATE_HOME/sessions/$1-$2.json"; }
+write_stamp() {   # write_stamp <side> <svc> <ok 0|1> <who or error>
+  local f; f="$(stamp_file "$1" "$2")"; mkdir -p "$(dirname "$f")"; chmod 700 "$(dirname "$f")"
+  python3 - "$f" "$1-$2" "$3" "$4" <<'PY'
+import json, sys, datetime, os
+f, name, ok, msg = sys.argv[1:5]
+try: prev = json.load(open(f))
+except Exception: prev = {}
+now = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+d = {"session": name, "checked_at": now, "ok": ok == "1"}
+if ok == "1": d.update(who=msg, confirmed_at=now)
+else: d.update(error=msg[:200], who=prev.get("who"), confirmed_at=prev.get("confirmed_at"))
+json.dump(d, open(f + ".tmp", "w")); os.replace(f + ".tmp", f)
+PY
+}
+whoami_session() {   # prints the signed-in UPN, checked against the expected account (graph.mjs pins and verifies /me)
+  local cache="$1" upn="$2"
+  (cd "$KIT" && V_UPN="$upn" V_CACHE="$cache" node --input-type=module -e \
+    "import {connect} from './graph.mjs'; const {me} = await connect({upn: process.env.V_UPN, cache: process.env.V_CACHE, scopes: ['User.Read']}); console.log(me.userPrincipalName);")
+}
+verify_session() {
+  local side="$1" svc="$2" cache upn out
+  cache="$(session_cache "$side" "$svc")"; upn="$(session_upn "$side")"
+  [[ -n "$cache" && -s "$cache" && -n "$upn" ]] || return 0
+  if out="$(whoami_session "$cache" "$upn" 2>&1)"; then write_stamp "$side" "$svc" 1 "$(tail -1 <<<"$out")"
+  else write_stamp "$side" "$svc" 0 "$(tail -1 <<<"$out")"; fi
+}
+
+cmd_login() {
+  local side="${1:-}"; shift || true
+  [[ "$side" == being || "$side" == owner ]] || { echo "usage: $NAME login being|owner [--teams|--outlook|--web] [--scopes a,b]" >&2; exit 2; }
+  local svcs=() scopes="" web=false
+  while (( $# )); do
+    case "$1" in
+      --teams) svcs+=(teams) ;; --outlook) svcs+=(outlook) ;; --web) web=true ;;
+      --scopes) scopes="${2:?--scopes needs a value}"; shift ;;
+      *) echo "unknown option $1" >&2; exit 2 ;;
+    esac; shift
+  done
+  if $web; then
+    local ow="$WORKSPACE/ops/owner-access/owner-web"
+    [[ $side == owner ]] || { echo "web sign-in is for the owner's browser session only" >&2; exit 2; }
+    [[ -x "$ow" ]] || { echo "owner-web is not installed (install.sh --update --with owner-access)" >&2; exit 1; }
+    exec "$ow" login
+  fi
+  (( ${#svcs[@]} )) || svcs=(teams outlook)
+  load_kit_env
+  caches_distinct
+  if [[ $side == owner && "${BEING_OWNER_DELEGATE:-0}" != 1 ]]; then
+    echo "REFUSED: owner sign-in is off. Read ops/teams-kit/GUARDRAILS.md \"Threat model\", then set BEING_OWNER_DELEGATE=1" >&2; exit 2
+  fi
+  local svc cache upn
+  for svc in "${svcs[@]}"; do
+    cache="$(session_cache "$side" "$svc")"; upn="$(session_upn "$side")"
+    [[ -n "$upn" ]] || { echo "set $(tr a-z A-Z <<<"$side")_UPN in $KIT/.env" >&2; exit 2; }
+    [[ -n "$cache" ]] || { echo "set the $side $svc cache path in $KIT/.env ($(tr a-z A-Z <<<"$side")_CACHE)" >&2; exit 2; }
+    mkdir -p "$(dirname "$cache")"; chmod 700 "$(dirname "$cache")" 2>/dev/null || true
+    echo "== $side $svc session: sign in as $upn"
+    (cd "$KIT" && node teams-login-device.mjs --upn "$upn" --cache "$cache" --scopes "${scopes:-$(session_scopes "$side" "$svc")}")
+    chmod 600 "$cache" 2>/dev/null || true
+    verify_session "$side" "$svc"
+  done
+}
+
+cmd_access() {
+  local verify=false; [[ "${1:-}" == --verify ]] && verify=true
+  local f id; f="$(toml_file)"
+  echo "Access for $NAME (${f:-no being.toml: everything optional is off})"
+  if [[ -n "$f" ]]; then
+    while IFS= read -r id; do
+      [[ -n "$id" ]] || continue
+      printf '  %-18s %s\n' "$id" "$(access_info "$id" || echo "(not in the kit menu; describe it in TOOLS.md)")"
+    done < <(access_list)
+  fi
+  echo
+  echo "Sign-in sessions (separate caches; Being and owner never share one)"
+  printf '  %-14s %-28s %-8s %-28s %s\n' SESSION ACCOUNT CACHE "WHO-AM-I" "LAST CONFIRMED"
+  local have_env=false; [[ -f "$KIT/.env" ]] && { load_kit_env >/dev/null 2>&1 && have_env=true; }
+  local side svc cache upn st who at label
+  for side in being owner; do
+    for svc in teams outlook; do
+      label="${side^} ${svc^}"
+      cache=""; upn=""
+      if $have_env; then cache="$(session_cache "$side" "$svc")"; upn="$(session_upn "$side")"; fi
+      st="none"; [[ -n "$cache" && -s "$cache" ]] && st="present"
+      $verify && [[ $st == present ]] && verify_session "$side" "$svc"
+      read -r who at < <(python3 - "$(stamp_file "$side" "$svc")" <<'PY'
+import json, sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: d = {}
+who = d.get("who") or "-"
+if d and not d.get("ok"): who = "FAILED"
+print(who, d.get("confirmed_at") or "never")
+PY
+)
+      printf '  %-14s %-28s %-8s %-28s %s\n' "$label" "${upn:--}" "$st" "$who" "$at"
+    done
+  done
+  $verify || echo "  (run '$NAME access --verify' to re-check each present session live)"
+}
+
+# ---- app stacks ----------------------------------------------------------------
+stacks_rows() { [[ -f "$STACKS_FILE" ]] && grep -v '^[[:space:]]*\(#\|$\)' "$STACKS_FILE" || true; }
+running_count() { [[ -n "$1" ]] && command -v docker >/dev/null 2>&1 || { echo "-"; return; }; docker ps -q --filter "label=com.docker.compose.project=$1" 2>/dev/null | grep -c . || true; }
+boot_allow() { echo "${BEING_BOOT_ALLOW:-$NAME|being-}"; }
+
+stacks_register() {   # stacks_register <name> <runner> [project]
+  mkdir -p "$(dirname "$STACKS_FILE")"; chmod 700 "$(dirname "$STACKS_FILE")" 2>/dev/null || true
+  [[ -f "$STACKS_FILE" ]] || printf '# name\trunner\tcompose project (empty = host processes)\n' >"$STACKS_FILE"
+  local tmp; tmp="$(mktemp)"
+  awk -F'\t' -v n="$1" '$1 != n' "$STACKS_FILE" >"$tmp"
+  printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}" >>"$tmp"
+  mv "$tmp" "$STACKS_FILE"
+}
+
+cmd_stacks() {
+  local row name runner proj n
+  case "${1:-status}" in
+    list)
+      printf '%-18s %-30s %s\n' STACK "UP / DOWN" "COMPOSE PROJECT"
+      while IFS=$'\t' read -r name runner proj; do printf '%-18s %-30s %s\n' "$name" "$runner up | $runner down" "${proj:--}"; done < <(stacks_rows) ;;
+    status)
+      printf '%-18s %-8s %-10s %s\n' STACK RUNNER CONTAINERS STATE
+      while IFS=$'\t' read -r name runner proj; do
+        local have; have=$(command -v "$runner" >/dev/null 2>&1 && echo ok || echo MISSING)
+        n="$(running_count "$proj")"
+        if [[ "$n" == - ]]; then printf '%-18s %-8s %-10s %s\n' "$name" "$have" - "host processes: $runner status"
+        elif (( n > 0 )); then printf '%-18s %-8s %-10s %s\n' "$name" "$have" "$n" up
+        else printf '%-18s %-8s %-10s %s\n' "$name" "$have" "$n" down; fi
+      done < <(stacks_rows) ;;
+    down)
+      while IFS=$'\t' read -r name runner proj; do
+        n="$(running_count "$proj")"
+        [[ "$n" == 0 ]] && continue
+        command -v "$runner" >/dev/null 2>&1 || { echo "! $name: runner '$runner' not on PATH, skipped"; continue; }
+        echo "-- $name down"; "$runner" down </dev/null || echo "! $name: down failed"
+      done < <(stacks_rows)
+      echo "all registered stacks stopped" ;;
+    audit) stacks_audit ;;
+    disarm)
+      command -v docker >/dev/null 2>&1 || { echo "no docker"; return 0; }
+      local armed; armed="$(stacks_armed | grep -Ev "$(boot_allow)" | cut -f1 || true)"
+      [[ -n "$armed" ]] && docker update --restart=no $armed >/dev/null
+      echo "restart=no set on $(grep -c . <<<"$armed" || true) container(s)"; stacks_audit ;;
+    add) [[ -n "${2:-}" && -n "${3:-}" ]] || { echo "usage: $NAME stacks add <name> <runner> [compose project]" >&2; exit 2; }
+         stacks_register "$2" "$3" "${4:-}"; echo "registered $2 in $STACKS_FILE" ;;
+    remove) [[ -n "${2:-}" ]] || exit 2
+            [[ -f "$STACKS_FILE" ]] && { awk -F'\t' -v n="$2" '$1 != n' "$STACKS_FILE" >"$STACKS_FILE.tmp" && mv "$STACKS_FILE.tmp" "$STACKS_FILE"; }
+            echo "removed $2" ;;
+    *) echo "usage: $NAME stacks list|status|down|audit|disarm|add|remove" >&2; exit 2 ;;
+  esac
+}
+
+stacks_armed() {   # "<name>\t<policy>" for every container that would start at boot
+  docker ps -aq 2>/dev/null | xargs -r docker inspect -f '{{.Name}}	{{.HostConfig.RestartPolicy.Name}}' 2>/dev/null \
+    | sed 's#^/##' | awk -F'\t' '$2 != "no" && $2 != ""' || true
+}
+
+stacks_audit() {
+  local allow found=0 x; allow="$(boot_allow)"
+  if command -v docker >/dev/null 2>&1; then
+    x="$(stacks_armed | grep -Ev "$allow" || true)"
+    if [[ -n "$x" ]]; then echo "! containers armed to start at boot:"; sed 's/^/    /' <<<"$x"; found=1; else echo "ok no container armed to start at boot"; fi
+  fi
+  x="$(crontab -l 2>/dev/null | grep '^[^#]*@reboot' | grep -Ev "$allow" || true)"
+  if [[ -n "$x" ]]; then echo "! @reboot cron entries:"; sed 's/^/    /' <<<"$x"; found=1; else echo "ok no @reboot cron entries"; fi
+  if command -v systemctl >/dev/null 2>&1; then
+    x="$(systemctl --user list-unit-files --state=enabled --no-legend 2>/dev/null | awk '{print $1}' | grep -Ev "$allow" || true)"
+    [[ -n "$x" ]] && { echo "! user units enabled at login/boot (allowed: $allow):"; sed 's/^/    /' <<<"$x"; found=1; }
+  fi
+  local f
+  for f in "${XDG_CONFIG_HOME:-$HOME/.config}"/autostart/*.desktop; do
+    [[ -f "$f" ]] || continue
+    grep -q '^Hidden=true' "$f" || { echo "! starts at login: $f"; found=1; }
+  done
+  return 0
+}
+
+# ---- stack new ------------------------------------------------------------------
+kit_template() { local f; for f in "$WORKSPACE/ops/kit-templates/$1" "$(dirname "$SELF")/$1"; do [[ -f "$f" ]] && { echo "$f"; return; }; done; return 1; }
+safe_value() { [[ "$2" != *[\"\$\`\\]* && "$2" != *$'\n'* ]] || { echo "$1 must not contain quotes, \$, backticks or backslashes" >&2; exit 2; }; }
+
+cmd_stack() {
+  [[ "${1:-}" == new && -n "${2:-}" ]] || { echo "usage: $NAME stack new <app> [--home DIR] [--project P] [--compose F] [--url U] [--env F] [--bin DIR] [--shim [--unit U] [--autostart F]] [--force]" >&2; exit 2; }
+  local app="$2"; shift 2
+  [[ "$app" =~ ^[a-z][a-z0-9-]*$ ]] || { echo "app name: lowercase letters, digits, dashes" >&2; exit 2; }
+  local home="$CALLER_PWD" project="$app" compose="" url="" envf="" bin="${BEING_STACK_BIN:-$HOME/.local/bin}" shim=false unit="" autostart="" force=false
+  while (( $# )); do
+    case "$1" in
+      --home) home="$(cd "$CALLER_PWD" && readlink -m "${2:?}")"; shift ;; --project) project="${2:?}"; shift ;;
+      --compose) compose="${2:?}"; shift ;; --url) url="${2:?}"; shift ;; --env) envf="${2:?}"; shift ;;
+      --bin) bin="${2:?}"; shift ;; --shim) shim=true ;; --unit) unit="${2:?}"; shift ;;
+      --autostart) autostart="${2:?}"; shift ;; --force) force=true ;;
+      *) echo "unknown option $1" >&2; exit 2 ;;
+    esac; shift
+  done
+  local var; var="$(tr 'a-z-' 'A-Z_' <<<"$app")"
+  local out="$bin/$app" tpl
+  [[ -e "$out" ]] && ! $force && { echo "$out exists (use --force to replace it)" >&2; exit 1; }
+  mkdir -p "$bin"
+  if $shim; then
+    tpl="$(kit_template desktop-shim)" || { echo "desktop-shim template not found" >&2; exit 1; }
+    safe_value --unit "$unit"; safe_value --autostart "$autostart"
+    python3 - "$tpl" "$out" TOOL="$app" TOOL_VAR="$var" UNIT="$unit" AUTOSTART="${autostart:-$app.desktop}" <<'PY'
+import sys
+t = open(sys.argv[1]).read()
+for kv in sys.argv[3:]:
+    k, v = kv.split("=", 1); t = t.replace("{{" + k + "}}", v)
+open(sys.argv[2], "w").write(t)
+PY
+    chmod +x "$out"; echo "created $out (desktop shim; put $bin before the real $app on PATH)"
+    return 0
+  fi
+  [[ "$project" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || { echo "--project: lowercase letters, digits, dashes, underscores" >&2; exit 2; }
+  if [[ -z "$compose" ]]; then
+    local c; compose=compose.yaml
+    for c in compose.yaml compose.yml docker-compose.yml docker-compose.yaml; do [[ -f "$home/$c" ]] && { compose="$c"; break; }; done
+  fi
+  [[ -z "$envf" && -f "$CONFIG_DIR/$app.env" ]] && envf="$CONFIG_DIR/$app.env"
+  safe_value --home "$home"; safe_value --compose "$compose"; safe_value --url "$url"; safe_value --env "$envf"
+  tpl="$(kit_template stack-runner)" || { echo "stack-runner template not found" >&2; exit 1; }
+  python3 - "$tpl" "$out" APP="$app" APP_VAR="$var" PROJECT="$project" HOME="$home" COMPOSE="$compose" ENV_FILE="$envf" URL="$url" <<'PY'
+import sys
+t = open(sys.argv[1]).read()
+for kv in sys.argv[3:]:
+    k, v = kv.split("=", 1); t = t.replace("{{" + k + "}}", v)
+open(sys.argv[2], "w").write(t)
+PY
+  chmod +x "$out"
+  stacks_register "$app" "$app" "$project"
+  echo "created $out and registered it in $STACKS_FILE"
+  echo "  $app up | down | status | logs | open    (${var}_HOME=<dir> runs another checkout)"
+}
+
+# ---- doctor ---------------------------------------------------------------------
+cmd_doctor() {
+  local fails=0 warns=0 f size limit="${BEING_MEMORY_INDEX_MAX:-24000}"
+  ok() { echo "  ok    $*"; }; warn() { echo "  WARN  $*"; warns=$((warns + 1)); }; bad() { echo "  FAIL  $*"; fails=$((fails + 1)); }
+  echo "$NAME doctor ($WORKSPACE)"
+  for f in "$HOME/.claude/CLAUDE.md" "$HOME/.codex/instructions.md"; do
+    if grep -q 'beings-kit:guardrails begin' "$f" 2>/dev/null; then ok "guardrails in $f"; else warn "no guardrails block in $f (install.sh --update --with operations)"; fi
+  done
+  # Claude loads only about the first 24 KB of an index; anything after that is silently cut off.
+  for f in "$SESSION_DIR/memory/MEMORY.md" "$WORKSPACE/.beings/MEMORY.md"; do
+    [[ -f "$f" ]] || continue
+    size=$(wc -c <"$f")
+    if (( size > limit )); then bad "$f is $size bytes (limit ~$limit): entries past the limit are not loaded; move detail into topic files"
+    elif (( size * 10 > limit * 9 )); then warn "$f is $size bytes, close to the ~$limit limit"
+    else ok "$f is $size bytes"; fi
+  done
+  local manifest="$WORKSPACE/.beings/sessions/manifest.jsonl"
+  if [[ -f "$manifest" ]]; then
+    local miss; miss=$(grep -c '"present": false' "$manifest" || true)
+    if (( miss > 0 )); then warn "$miss recorded session(s) missing from disk (.beings/sessions/INDEX.md)"; else ok "session registry: none missing"; fi
+  fi
+  if [[ -x "$WORKSPACE/bin/being-memory-sync" ]]; then
+    local last; last="$(cat "$WORKSPACE/.beings/operations/last-success-date" 2>/dev/null || true)"
+    if [[ -z "$last" ]]; then warn "memory backup never succeeded (bin/being-memory-sync install)"
+    elif [[ "$last" < "$(date -d '2 days ago' +%F 2>/dev/null || echo 0)" ]]; then bad "last memory backup $last"
+    else ok "last memory backup $last"; fi
+  fi
+  if [[ -d "$CONFIG_DIR" ]]; then
+    local real fs; real="$(readlink -f "$CONFIG_DIR")"
+    [[ "$(stat -c %a "$real" 2>/dev/null || stat -f %Lp "$real")" == 700 ]] && ok "$CONFIG_DIR is 0700" || bad "$CONFIG_DIR should be 0700 (chmod 700)"
+    [[ "$real/" == "$WORKSPACE/"* ]] && bad "$CONFIG_DIR is inside the Being's repo; keep secrets outside it"
+    fs="$(stat -f -c %T "$real" 2>/dev/null || true)"
+    case "$fs" in ntfs*|fuseblk|vfat|msdos|exfat) bad "$CONFIG_DIR is on $fs: file modes are not enforced there" ;; esac
+    for f in "$real"/*.env; do
+      [[ -f "$f" ]] || continue
+      [[ "$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")" == 600 ]] || bad "$f should be 0600"
+    done
+  else
+    warn "no secrets folder $CONFIG_DIR (mkdir -m 700 it; one <app>.env per app, 0600)"
+  fi
+  if [[ -f "$KIT/.env" ]] && ( load_kit_env >/dev/null 2>&1 ); then
+    load_kit_env >/dev/null 2>&1
+    caches_distinct 2>/dev/null && ok "sign-in sessions use separate caches" || bad "two sign-in sessions share a cache file"
+    local allowed side svc c need; allowed=" $(access_list | tr '\n' ' ') "
+    if [[ -n "$(toml_file)" ]]; then
+      for side in being owner; do for svc in teams outlook; do
+        c="$(session_cache "$side" "$svc")"; [[ -n "$c" && -s "$c" ]] || continue
+        case "$side/$svc" in being/teams) need="owner_chat" ;; being/outlook) need="being_mail" ;;
+          owner/teams) need="owner_teams_read owner_teams_send" ;; owner/outlook) need="owner_mail_read owner_mail_send" ;; esac
+        local hit=false n; for n in $need; do [[ "$allowed" == *" $n "* ]] && hit=true; done
+        $hit && ok "$side $svc sign-in is on the access list" || bad "$side $svc is signed in but not on the [access] list ($need)"
+      done; done
+    fi
+  fi
+  if [[ -f "$STACKS_FILE" ]]; then
+    local name runner proj
+    while IFS=$'\t' read -r name runner proj; do command -v "$runner" >/dev/null 2>&1 || warn "stack $name: runner '$runner' not on PATH"; done < <(stacks_rows)
+    if command -v docker >/dev/null 2>&1; then
+      local armed; armed="$(stacks_armed | grep -Ev "$(boot_allow)" | grep -c . || true)"
+      (( armed > 0 )) && warn "$armed container(s) armed to start at boot ($NAME stacks audit)" || ok "no container armed to start at boot"
+    fi
+  fi
+  if [[ -x "$KIT/being-routine" ]]; then
+    local l
+    while IFS= read -r l; do
+      case "$l" in *FAIL\ *) bad "${l#*FAIL }" ;; *ok\ \ \ *) ok "${l#*ok   }" ;; esac
+    done < <("$KIT/being-routine" --check-units 2>&1 || true)
+  fi
+  echo "$NAME doctor: $fails failed, $warns warnings"
+  (( fails == 0 ))
+}
+
+case "${1:-}" in
+  claude) shift; launch_claude "$@" ;;
+  codex) shift; launch_codex "$@" ;;
+  monitor) shift; cmd_monitor "$@" ;;
+  access) shift; cmd_access "$@" ;;
+  login) shift; cmd_login "$@" ;;
+  stacks) shift; cmd_stacks "$@" ;;
+  stack) shift; cmd_stack "$@" ;;
+  doctor) shift; cmd_doctor "$@" ;;
+  update) shift; cmd_update "$@" ;;
+  help|-h|--help) usage ;;
+  "")
+    if [[ -t 0 && -t 1 ]]; then
+      read -r -p "Client for $NAME: 1) Claude Code  2) Codex  [1]: " c
+      case "${c:-1}" in 1|claude) launch_claude ;; 2|codex) launch_codex ;; *) echo "invalid choice" >&2; exit 2 ;; esac
+    else usage; exit 2; fi ;;
+  *) launch_claude "$@" ;;   # no client word: Claude Code, like the single-client wrapper
+esac

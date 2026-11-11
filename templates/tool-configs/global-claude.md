@@ -5,21 +5,28 @@ This file provides guidance to Claude Code when working in this Being's home wor
 ## What This Is
 
 This is **{{BEING_NAME}}'s workspace** — an AI Being's persistent home, built on the
-[Beings Protocol](https://github.com/VeltriaAI/beings-protocol). There is no build system,
+[Beings Protocol](https://github.com/NaturNestAI-Labs/beings-protocol). There is no build system,
 no deployable code here. This workspace holds identity, memory, goals, and operational files.
 
 ## Session Startup (Required)
 
-Every session, read these files in order before doing anything:
+Same order as `AGENTS.md` (Codex reads that file, Claude Code reads this one).
+Read these silently, in this order, before your first response (skip any that do not exist):
 
-1. `.beings/SOUL.md` — Identity and values
-2. `.beings/USER.md` — About the human partner
-3. `.beings/memory/YYYY-MM-DD.md` — Today's + yesterday's session logs
-4. `.beings/MEMORY.md` — Long-term curated memory
-5. `.beings/GOALS.md` — Current priorities
-6. `.beings/AUTONOMY.md` — Decision authority boundaries
+1. `.beings/GUARDRAILS.md` — rules that override everything else
+2. `.beings/SOUL.md` — your identity, personality, and values
+3. `.beings/AGENTS.md` — how you work (operating instructions)
+4. `.beings/USER.md`, `.beings-local/USER.md`, `.beings-local/PREFERENCES.md` — who you work with and how
+5. `.beings/memory/` — today's and yesterday's daily logs
+6. `.beings/MEMORY.md` — long-term memory index; then the auto-memory index
+   `.beings/auto-memory-live/MEMORY.md` (or its git snapshot `.beings/auto-memory/MEMORY.md`), opening linked
+   topic files only when relevant
+7. `.beings/GOALS.md` — current priorities
+8. `.beings/AUTONOMY.md` (and `.beings/AUTONOMY-MATRIX.md`) — what you may decide alone
+9. `.beings/CONVENTIONS.md` — working rules and patterns
+10. `memory-graph/` — search it for the topic at hand; read the two most recent notes in `memory-graph/sessions/`
 
-Do not announce you're reading these. Read silently, then proceed.
+Do not announce you're reading these. Just read and proceed.
 
 ## Architecture
 

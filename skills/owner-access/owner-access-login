@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# owner-access-login being|owner [--teams] [--outlook] [--browser] [--scopes a,b]: one headless sign-in per identity and
+# service, each into its own token cache or browser profile. The owner types their own password and code.
+set -euo pipefail
+KIT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+set -a
+# shellcheck source=/dev/null
+. "$KIT/.env"
+set +a
+export BEING_STATE_DIR="${BEING_STATE_DIR:-$KIT/state}"
+role=${1:-}; shift || true
+[[ $role == being || $role == owner ]] || { echo "usage: owner-access-login being|owner [--teams] [--outlook] [--browser] [--scopes a,b]" >&2; exit 2; }
+teams=0 outlook=0 browser=0 extra=""
+while (($#)); do
+  case $1 in --teams) teams=1 ;; --outlook) outlook=1 ;; --browser) browser=1 ;; --scopes) extra=${2:?}; shift ;;
+    *) echo "unknown option $1" >&2; exit 2 ;; esac; shift
+done
+((teams + outlook + browser)) || { teams=1; outlook=1; }
+if [[ $role == being ]]; then upn=${BEING_UPN:?BEING_UPN not set}; cache=${BEING_CACHE:?BEING_CACHE not set}
+else upn=${OWNER_UPN:?OWNER_UPN not set}; cache=${OWNER_CACHE:-}; fi
+# Never the same cache for both identities.
+if [[ -n ${BEING_CACHE:-} && -n ${OWNER_CACHE:-} && "$(readlink -m "$BEING_CACHE")" == "$(readlink -m "$OWNER_CACHE")" ]]; then
+  echo "refused: BEING_CACHE and OWNER_CACHE are the same file; give the owner a separate cache (state/owner-cache.json)" >&2; exit 2
+fi
+
+if ((teams || outlook)); then
+  [[ -n $cache ]] || { echo "OWNER_CACHE not set (and BEING_OWNER_DELEGATE=1) in the kit .env" >&2; exit 2; }
+  scopes=User.Read
+  if [[ $role == being ]]; then
+    # The Being's cache keeps the kit's full set (the Teams loop needs all of it); stamps record the services checked.
+    scopes+=,Chat.ReadWrite,ChatMessage.Send,Chat.Create,Files.ReadWrite,Presence.ReadWrite,Mail.ReadWrite,Mail.Send
+  else
+    ((teams)) && scopes+=,Chat.Read
+    ((outlook)) && scopes+=,Mail.Read
+    echo ">> The OWNER signs in now, on their own device, with their own password. Nobody else types it."
+  fi
+  [[ -n $extra ]] && scopes+=",$extra"
+  # One sign-in carries every scope chosen here; a later sign-in replaces it, so list them all each time.
+  node "$KIT/teams-login-device.mjs" --upn "$upn" --cache "$cache" --scopes "$scopes"
+  chmod 600 "$cache"
+  ((teams)) && node "$KIT/sessions.mjs" stamp "$role" teams "$upn"
+  ((outlook)) && node "$KIT/sessions.mjs" stamp "$role" outlook "$upn"
+fi
+if ((browser)); then
+  # The browser sign-in tools run only on the owner lane: a short grant for this sign-in, revoked on exit.
+  BEING_SEND_TOKEN=$(node "$KIT/scope.mjs" mint owner-only 1); export BEING_SEND_TOKEN
+  trap 'printf %s "$BEING_SEND_TOKEN" | node "$KIT/scope.mjs" revoke' EXIT
+  flag=(); [[ $role == being ]] && flag=(--being)
+  echo ">> A browser window opens: sign in as $upn ($role) and tick \"Stay signed in\", then close it."
+  node "$KIT/owner-web.mjs" login "${flag[@]}"
+  node "$KIT/owner-web.mjs" whoami "${flag[@]}" --stamp
+fi
+node "$KIT/sessions.mjs" status

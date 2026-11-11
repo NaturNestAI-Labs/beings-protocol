@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""being-status [--actions N] [--triage] [--chat <chatId>] [--no-jobs]: what the Being is doing now, from live state only.
+   --triage: the session list cut to one line; --chat: only that teammate chat's queue, jobs and board lines;
+   --no-jobs: leave the job list out (triage gets it from triage-jobs.py)."""
+import glob, json, os, re, sys, time, uuid
+from datetime import datetime
+
+KIT = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, KIT)
+# Run standalone too: fill missing settings from the kit's .env.
+if os.path.exists(os.path.join(KIT, ".env")):
+    for l in open(os.path.join(KIT, ".env")):
+        k, _, v = l.split("#", 1)[0].strip().partition("=")
+        if k and v.strip(): os.environ.setdefault(k, v.strip())
+STATE = os.environ.get("BEING_STATE_DIR") or sys.exit("BEING_STATE_DIR not set")
+NAME = os.environ.get("BEING_NAME", "being")
+WORKSPACE = os.environ.get("BEING_WORKSPACE") or os.path.dirname(os.path.dirname(KIT))
+CLAUDE_DIR = os.path.expanduser("~/.claude/projects/" + re.sub(r"[/.]", "-", os.path.realpath(WORKSPACE)))
+N = int(sys.argv[sys.argv.index("--actions") + 1]) if "--actions" in sys.argv else 8
+CHAT = sys.argv[sys.argv.index("--chat") + 1] if "--chat" in sys.argv else ""
+TRIAGE = "--triage" in sys.argv
+NO_JOBS = "--no-jobs" in sys.argv
+try: import mesh
+except Exception: mesh = None
+
+def job_lane(d):
+    try: s = json.load(open(os.path.join(STATE, "job-scopes", d["id"] + ".json"))).get("scope") or ""   # signed store (review #5)
+    except (OSError, ValueError, KeyError): s = d.get("scope") or ""
+    return "team:" + s[6:].split(",")[0] if s.startswith("chats:") and s[6:] else "owner"
+
+def ago(ts):
+    s = int(time.time() - ts); return f"{s // 3600}h{s % 3600 // 60:02d}m" if s >= 3600 else f"{s // 60}m{s % 60:02d}s"
+
+def lines(pattern):
+    out = []
+    for f in glob.glob(pattern):
+        out += [json.loads(l) for l in open(f) if l.strip()]
+    return out
+
+def brief(m):
+    if m.get("lane") == "job": return f"job {m.get('name')} finished ({m.get('status')})"
+    if m.get("addressedBy") == "note": return f"note from {m.get('from', '?')}: “{(m.get('text') or '')[:90]}”"
+    return f"{m.get('from', '?')}: “{(m.get('text') or '')[:90]}”"
+
+def actions(path, since):
+    """Latest tool calls from a Claude Code transcript after `since` (epoch)."""
+    acts = []
+    try:
+        for l in open(path):
+            try: e = json.loads(l)
+            except ValueError: continue
+            ts = e.get("timestamp")
+            if not ts or datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() < since: continue
+            for c in (e.get("message") or {}).get("content") or []:
+                if isinstance(c, dict) and c.get("type") == "tool_use":
+                    i = c.get("input") or {}
+                    what = i.get("description") or i.get("file_path") or i.get("command") or i.get("pattern") or ""
+                    acts.append(f"{ts[11:16]}Z {c.get('name')}: {' '.join(str(what).split())[:100]}")
+    except FileNotFoundError:
+        pass
+    return acts[-N:]
+
+
+def with_subagents(sid, since):
+    """The session's own actions plus those of the sub-agents it delegated to (their own transcripts), newest last."""
+    acts = actions(os.path.join(CLAUDE_DIR, sid + ".jsonl"), since)
+    for sf in glob.glob(os.path.join(CLAUDE_DIR, sid, "subagents", "*.jsonl")):
+        if os.path.getmtime(sf) < since: continue
+        try: desc = json.load(open(sf[:-6] + ".meta.json")).get("description") or "sub-agent"
+        except (OSError, ValueError): desc = "sub-agent"
+        acts += [f"{a[:7]}[{desc[:30]}] {a[7:]}" for a in actions(sf, since)]
+    return sorted(acts)[-N:]
+
+
+def last_output(path):
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(max(0, os.path.getsize(path) - 4096))
+            tail = [l for l in fh.read().decode("utf-8", "replace").splitlines() if l.strip()]
+        return " ".join(tail[-1].split())[:120] if tail else ""
+    except OSError: return ""
+
+print(f"{NAME} status · {datetime.now().astimezone():%Y-%m-%d %H:%M %Z}\n")
+owner_sid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"being-daily/{NAME}/{datetime.now():%Y-%m-%d}"))
+running = False
+for bf in sorted(glob.glob(os.path.join(STATE, "work.*.jsonl"))):
+    pid = bf.rsplit(".", 2)[-2]
+    if not pid.isdigit() or not os.path.exists(f"/proc/{pid}"): continue
+    start = os.path.getmtime(bf)
+    sid, lane, sname = owner_sid, "owner", ""   # being-handle records the lane session a run is in
+    try:
+        w = open(os.path.join(STATE, f"work-session.{pid}")).read().split(); sid, lane = w[:2]; sname = w[2] if len(w) > 2 else ""
+    except (OSError, ValueError): pass
+    if CHAT and lane != "team:" + CHAT: continue   # lanes run in parallel: other conversations don't hold this one up
+    running = True
+    print(f"▶ WORKING ({'this chat' if CHAT else sname or lane}, {ago(start)} so far) on:")
+    for m in lines(os.path.join(STATE, f"work-*.{pid}.jsonl")) or lines(bf):
+        if not CHAT or m.get("chatId") == CHAT: print(f"   - {brief(m)}")
+    acts = with_subagents(sid, start)
+    print("   latest actions:" if acts else "   latest actions: none recorded yet")
+    for a in acts: print(f"   · {a}")
+    print()
+if not running: print("▶ Daily session: idle\n")
+
+queued = lines(os.path.join(STATE, "queue.jsonl")) + lines(os.path.join(STATE, "work.jsonl")) + lines(os.path.join(STATE, "lanes", "*.inbox.jsonl"))
+if CHAT: queued = [m for m in queued if m.get("chatId") == CHAT]
+print(f"⏳ Waiting: {len(queued)}" + (" (answered after the current run)" if queued and running else ""))
+for m in queued: print(f"   - {brief(m)}")
+
+def load(j):
+    try: return json.load(open(j))
+    except (OSError, ValueError): return None
+
+jobs = [] if NO_JOBS else sorted(glob.glob(os.path.join(STATE, "jobs", "*.json")), key=os.path.getmtime, reverse=True)
+jobs = [d for d in map(load, jobs) if isinstance(d, dict) and "started" in d]
+if CHAT: jobs = [d for d in jobs if job_lane(d) == "team:" + CHAT]   # only jobs this chat's runs started
+# Running first: a finished job rewrites its file, so mtime order alone pushes long-running jobs out of the list.
+jobs = sorted(jobs, key=lambda d: d.get("status") != "running")[:8]
+if not NO_JOBS: print(f"\n🧰 Jobs: {len(jobs) or 'none'}")
+for d in jobs:
+    st = datetime.fromisoformat(d["started"]).timestamp()
+    print(f"   - {d['name']} [{d['kind']}] {d['status']}" + (f", running {ago(st)}" if d["status"] == "running"
+          else f", exit {d.get('exit')}, finished {d.get('finished', '')[11:16]}"))
+    if d["status"] != "running": continue
+    lo = last_output(os.path.join(STATE, "jobs", d["id"] + (".events.jsonl" if d["kind"] == "codex" else ".log")))
+    if lo: print(f"     last output: {lo}")
+    if d["kind"] == "agent" and d.get("session_id"):
+        for a in with_subagents(d["session_id"], st)[-3:]: print(f"     · {a}")
+
+if mesh:
+    lane = "team:" + CHAT if CHAT else "owner"
+    rows = [r for r in mesh.sessions(include_other=not CHAT) if r["state"] != "ended"]
+    if CHAT: rows = [r for r in rows if r.get("lane") == lane]   # only this chat's own sessions
+    if TRIAGE or CHAT: print("\n🧩 " + mesh.summary_line(rows))
+    else:
+        print(f"\n🧩 Sessions: {len(rows) or 'none running'}  (steer: being-steer <name> \"<message>\")")
+        for l in mesh.table(rows): print(l)
+    b = mesh.board_list(lane, 10)
+    print(f"\n📋 Board today: {len(b) or 'nothing yet'}")
+    for l in mesh.board_lines(b, show_lane=not CHAT): print(l)
+
+if CHAT: sys.exit(0)
+bl = os.path.join(STATE, "blockers.jsonl")
+recent = [b for b in (lines(bl) if os.path.exists(bl) else []) if not b.get("resolved") and time.time() - datetime.fromisoformat(b["at"]).timestamp() < 86400]
+print(f"\n🚧 Blockers (24 h): {len(recent) or 'none'}")
+for b in recent[-5:]: print(f"   - {b['at'][11:16]} {b['task']}: {b['error'][:90]} → needs: {b['need'][:80]}")
+import subprocess
+try:   # failed work and failed sends (being-retry), then the hive's own one-line view
+    r = subprocess.run([sys.executable, os.path.join(KIT, "being-retry"), "status"], capture_output=True, text=True, timeout=10)
+    print(f"\n♻️  Retry: {r.stdout.strip() or 'unknown'}")
+except Exception as e: print(f"\n♻️  Retry: unknown ({e})")
+try:   # the dead-man check (its own timer, being-deadman): last result
+    d = json.load(open(os.path.join(STATE, "deadman.json")))
+    print(f"\n🫀 Health ({d['at'][11:16]}, alert channel: {d.get('channel', 'none')}): " + ("ok" if d["ok"] else "; ".join(d["problems"])))
+except (OSError, ValueError, KeyError): print("\n🫀 Health: no dead-man result yet")
+try:
+    r = subprocess.run(["hive-status", "--brief"], capture_output=True, text=True, timeout=10)
+    if r.stdout.strip(): print("\n" + r.stdout.rstrip())
+except Exception: pass

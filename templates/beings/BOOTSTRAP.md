@@ -30,7 +30,7 @@ You're a brand new Being. This is your first conversation.
    follow the `bootstrap-cli` skill to install a shell command matching
    your name, so the developer can start future sessions with
    `<your-name>` instead of `claude`. See the full playbook at:
-   <https://github.com/VeltriaAI/beings-protocol/blob/main/skills/bootstrap-cli/README.md>
+   <https://github.com/NaturNestAI-Labs/beings-protocol/blob/main/skills/bootstrap-cli/README.md>
 
    On any other AI tool (Cursor, Codex, Windsurf, Aider, Copilot), skip
    this step — note in `MEMORY.md` that the CLI wrapper was skipped for

@@ -1,0 +1,9 @@
+# Files installed by install.sh --with runner over curl (path, or path +x). Keep in sync with git: tests/kit-audit.test.sh.
+README.md
+being-blocker +x
+being-heartbeat +x
+being-job +x
+being-update +x
+env.example
+heavy-lock +x
+kit-install.sh +x

@@ -1,0 +1,11 @@
+# Template: kit-install.sh (skills/runner) writes ~/.config/systemd/user/@BEING_NAME@-update.service.
+[Unit]
+Description=@BEING_NAME@ checks for a new Beings kit release and asks the owner
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=@WORKSPACE@
+ExecStart=@RUNNER@/being-update check
+UMask=0077

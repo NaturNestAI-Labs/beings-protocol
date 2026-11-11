@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# hive-mcp-stdio: the hive MCP server (stdio) for workspace sessions, over the forced-command ssh as the kit user.
+# Inside a sandbox this path holds a kit-client shim instead, which reaches the hive through the run's broker.
+exec ssh -q "${BEING_HIVE_SSH:-hive}" "$@"   # BEING_HIVE_SSH: the ssh host alias with the forced hive-mcp command

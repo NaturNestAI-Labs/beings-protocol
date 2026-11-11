@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""being-board add promise|done|handoff "<one line>" [--lane <lane>] | being-board list [N] [--all-days]
+   Today's board (state/board.jsonl); a teammate lane sees and writes only its own lines (README "Script notes")."""
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import mesh
+
+a = sys.argv[1:]
+if a[:1] == ["add"] and len(a) >= 3:
+    lane = a[a.index("--lane") + 1] if "--lane" in a else None
+    words = [w for i, w in enumerate(a[2:], 2) if w != "--lane" and (i == 0 or a[i - 1] != "--lane")]
+    rc, msg = mesh.board_add(a[1], " ".join(words), lane)
+    print(msg, file=sys.stderr if rc else sys.stdout); sys.exit(rc)
+if a[:1] in (["list"], []):
+    n = int(a[1]) if len(a) > 1 and a[1].isdigit() else 20
+    me = mesh.caller_lane()
+    if me == mesh.DENIED: print("refused: this run's send grant is not valid", file=sys.stderr); sys.exit(3)
+    rows = mesh.board_list(me, n, today_only="--all-days" not in a)
+    print(f"Board ({'today' if '--all-days' not in a else 'all'}, {len(rows)} lines)")
+    for l in mesh.board_lines(rows, show_lane=me == "owner"): print(l)
+    sys.exit(0)
+print(__doc__, file=sys.stderr); sys.exit(2)

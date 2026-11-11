@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# owner-access-run <tool> [args...]: run a scheduled owner-access tool (cron/systemd, as the kit user) under a one-hour
+# owner-only grant. Only the tools below; a caller that already holds a teammate grant is refused.
+set -euo pipefail
+KIT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+set -a
+# shellcheck source=/dev/null
+. "$KIT/.env"
+set +a
+tool=${1:?usage: owner-access-run shared-inbox-monitor.sh|mail-forward-rules.mjs [args...]}; shift
+case "$tool" in
+  shared-inbox-monitor.sh) cmd=("$KIT/shared-inbox-monitor.sh") ;;
+  mail-forward-rules.mjs) cmd=(node "$KIT/mail-forward-rules.mjs") ;;
+  *) echo "owner-access-run: $tool is not a scheduled owner-access tool" >&2; exit 2 ;;
+esac
+if [[ -n ${BEING_SEND_TOKEN:-} ]]; then
+  node "$KIT/scope.mjs" owner-read-ok || { echo "blocked: this run holds a non-owner grant" >&2; exit 3; }
+  exec "${cmd[@]}" "$@"
+fi
+BEING_SEND_TOKEN=$(node "$KIT/scope.mjs" mint owner-only 1); export BEING_SEND_TOKEN
+trap 'printf %s "$BEING_SEND_TOKEN" | node "$KIT/scope.mjs" revoke' EXIT
+"${cmd[@]}" "$@"

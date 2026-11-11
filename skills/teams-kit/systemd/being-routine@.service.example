@@ -1,0 +1,14 @@
+# Template. Install as ~/.config/systemd/user/<being>-routine@.service, replacing @BEING_NAME@, @KIT@ (absolute path of
+# skills/teams-kit) and @WORKSPACE@ (the Being's workspace). Instance = a routine name in routines.conf; add one timer per
+# routine (e.g. <being>-routine@brief.timer). being-routine mints a signed grant for the routine's own chat (scope
+# routine:<chat>), then runs being-job. Enable a timer only when no other host runs the same routine, or the post goes out twice.
+[Unit]
+Description=@BEING_NAME@ scheduled routine %i
+
+[Service]
+Type=oneshot
+# being-job detaches the agent (setsid); without this systemd kills it when the oneshot exits.
+KillMode=process
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=@WORKSPACE@
+ExecStart=@KIT@/being-routine %i

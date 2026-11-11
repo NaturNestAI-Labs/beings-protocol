@@ -1,0 +1,12 @@
+# Heartbeat tick: runs the Being's idle checklist (.beings/HEARTBEAT.md). Copy to ~/.config/systemd/user/{{BEING_NAME}}-heartbeat.service
+# ops/heartbeat is yours to write; ops/kit-templates/jobs/scheduled-job/run.sh is a good start (off switch, lock, result file).
+[Unit]
+Description={{BEING_NAME}} heartbeat tick
+ConditionPathExists=!{{BEING_HOME}}/ops/teams-kit/state/STANDBY
+
+[Service]
+Type=oneshot
+WorkingDirectory={{BEING_HOME}}
+EnvironmentFile=-%h/.config/{{BEING_NAME}}/heartbeat.env
+ExecStart={{BEING_HOME}}/ops/heartbeat
+TimeoutStartSec=30min

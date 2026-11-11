@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# owner-read: READ-ONLY view of the owner's Teams via the owner's delegate cache. Never sends.
+#   owner-read --find <name> | --list [--top N] | --chat <chatId> [--top N] | <upn>
+set -euo pipefail
+KIT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+set -a
+# shellcheck source=/dev/null
+. "$KIT/.env"
+set +a
+# Allowed only under a full or owner-only grant minted by the handler (scope.mjs).
+node "$KIT/scope.mjs" owner-read-ok || { echo "blocked: only owner-lane runs may read the owner's chats" >&2; exit 3; }
+[[ "${BEING_OWNER_DELEGATE:-0}" == 1 && -s "${OWNER_CACHE:-}" ]] || { echo "no owner delegate sign-in (off unless BEING_OWNER_DELEGATE=1 and OWNER_CACHE)" >&2; exit 1; }
+BEING_CACHE="$OWNER_CACHE" exec node "$KIT/teams-read.mjs" --as "$OWNER_UPN" "$@"

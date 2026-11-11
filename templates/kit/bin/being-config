@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""Read a being.toml with a small TOML subset (no third-party modules, any python3).
+
+Supported: [table] and dotted [table.sub] headers, key = "basic" | 'literal' | integer | true/false,
+arrays of strings/ints/bools (may span lines), # comments. Anything else is an error.
+
+Usage:
+  being-config <file> get <table.key> [default]   print one value (arrays: one item per line)
+  being-config <file> list <table>                print "true" keys and the "allow" array of a table
+  being-config <file> json                        print the whole file as JSON
+  being-config <file> check                       exit 0 if the file parses
+"""
+import json
+import re
+import sys
+
+KEY = re.compile(r'^([A-Za-z0-9_-]+)\s*=\s*(.*)$')
+TABLE = re.compile(r'^\[([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\]\s*(#.*)?$')
+
+
+class TomlError(ValueError):
+    pass
+
+
+def _strip_comment(s):
+    out, q = [], None
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if q:
+            out.append(c)
+            if c == '\\' and q == '"' and i + 1 < len(s):
+                out.append(s[i + 1]); i += 2; continue
+            if c == q:
+                q = None
+        elif c in '"\'':
+            q = c; out.append(c)
+        elif c == '#':
+            break
+        else:
+            out.append(c)
+        i += 1
+    return ''.join(out).strip()
+
+
+def _scalar(tok, ln):
+    tok = tok.strip()
+    if len(tok) >= 2 and tok[0] == tok[-1] == '"':
+        try:
+            return json.loads(tok)
+        except ValueError:
+            raise TomlError(f'line {ln}: bad string {tok}')
+    if len(tok) >= 2 and tok[0] == tok[-1] == "'":
+        return tok[1:-1]
+    if tok in ('true', 'false'):
+        return tok == 'true'
+    if re.fullmatch(r'[+-]?\d+', tok):
+        return int(tok)
+    raise TomlError(f'line {ln}: unsupported value {tok!r} (subset: strings, integers, booleans, arrays)')
+
+
+def _split_array(body, ln):
+    items, cur, q = [], [], None
+    for c in body:
+        if q:
+            cur.append(c)
+            if c == q:
+                q = None
+        elif c in '"\'':
+            q = c; cur.append(c)
+        elif c == ',':
+            items.append(''.join(cur)); cur = []
+        elif c in '[]{':
+            raise TomlError(f'line {ln}: nested arrays and inline tables are not supported')
+        else:
+            cur.append(c)
+    items.append(''.join(cur))
+    return [_scalar(i, ln) for i in items if i.strip()]
+
+
+def parse(text):
+    data = {}
+    cur = data
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        ln = i + 1
+        line = _strip_comment(lines[i])
+        i += 1
+        if not line:
+            continue
+        m = TABLE.match(line)
+        if m:
+            cur = data
+            for part in m.group(1).split('.'):
+                if part in cur and not isinstance(cur[part], dict):
+                    raise TomlError(f'line {ln}: [{m.group(1)}] clashes with a key')
+                cur = cur.setdefault(part, {})
+            continue
+        if line.startswith('['):
+            raise TomlError(f'line {ln}: unsupported table header')
+        m = KEY.match(line)
+        if not m:
+            raise TomlError(f'line {ln}: expected key = value')
+        key, val = m.group(1), m.group(2).strip()
+        if key in cur:
+            raise TomlError(f'line {ln}: duplicate key {key}')
+        if val.startswith('['):
+            body = val[1:]
+            while ']' not in _strip_comment(body) and i < len(lines):
+                body += ' ' + _strip_comment(lines[i]); i += 1
+            body = _strip_comment(body)
+            if not body.endswith(']'):
+                raise TomlError(f'line {ln}: unterminated array')
+            cur[key] = _split_array(body[:-1], ln)
+        else:
+            cur[key] = _scalar(val, ln)
+    return data
+
+
+def main(argv):
+    if len(argv) < 3:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    path, cmd = argv[1], argv[2]
+    try:
+        with open(path, encoding='utf-8') as fh:
+            data = parse(fh.read())
+    except OSError as e:
+        print(f'being-config: {e.strerror}: {path}', file=sys.stderr)
+        return 1
+    except TomlError as e:
+        print(f'being-config: {path}: {e}', file=sys.stderr)
+        return 1
+    if cmd == 'check':
+        return 0
+    if cmd == 'json':
+        print(json.dumps(data, indent=2, sort_keys=True))
+        return 0
+    if cmd == 'get' and len(argv) >= 4:
+        val = data
+        for part in argv[3].split('.'):
+            val = val.get(part) if isinstance(val, dict) else None
+        if val is None:
+            if len(argv) >= 5:
+                print(argv[4])
+                return 0
+            return 1
+        if isinstance(val, list):
+            for v in val:
+                print(v)
+        elif isinstance(val, bool):
+            print('true' if val else 'false')
+        elif isinstance(val, dict):
+            print(json.dumps(val, sort_keys=True))
+        else:
+            print(val)
+        return 0
+    if cmd == 'list' and len(argv) >= 4:
+        tbl = data.get(argv[3], {})
+        seen = []
+        for v in tbl.get('allow', []) if isinstance(tbl.get('allow'), list) else []:
+            if str(v) not in seen:
+                seen.append(str(v))
+        for k, v in tbl.items():
+            if v is True and k not in seen:
+                seen.append(k)
+        for k, v in tbl.items():
+            if v is False and k in seen:
+                seen.remove(k)
+        print('\n'.join(seen))
+        return 0
+    print(__doc__.strip(), file=sys.stderr)
+    return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

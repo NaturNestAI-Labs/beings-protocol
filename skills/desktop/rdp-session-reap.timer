@@ -1,0 +1,10 @@
+# Template: skills/desktop/kit-install.sh writes ~/.config/systemd/user/rdp-session-reap.timer. Off until enabled.
+[Unit]
+Description=Check for abandoned remote desktop sessions every 2 min
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target

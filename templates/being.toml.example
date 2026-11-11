@@ -1,0 +1,114 @@
+# being.toml: one config file per Being (docs/CONFIG.md). Copy to <being-home>/being.toml, fill the <...> values.
+# No secrets here: it is committed. "{name}" etc. come from [being]; "~/" is the home of the machine that reads it.
+schema = 1
+
+[being]
+name = "nova"                    # lowercase letters, digits, dashes; used for units, hostnames and commands
+display_name = "Nova"            # the name people use in chat
+owner = "<Owner Name>"
+timezone = "UTC"                 # IANA name, e.g. "Europe/Berlin"; used for daily logs and session names
+branch = "main"                  # default branch of the Being's home repo
+branch_prefix = "{name}/"        # prefix for branches the Being creates in other repos
+workspace = "~/beings/{name}"    # the Being's home on its box
+config_dir = "~/.config/{name}"  # one key folder per Being (0700): secrets live here, never in git
+linux_user = "{name}"            # the Being's own Linux user on its box
+
+[kit]
+# Components install.sh --config adds (same as --with): teams-kit, owner-access, runner, tunnel, desktop, monitor,
+# memory-sync, statusline. Optional ones stay off until switched on.
+with = ["teams-kit"]
+
+[m365]
+# Microsoft 365 identities. The app and tenant ids go in ops/teams-kit/.env (M365_CLIENT_ID, M365_TENANT_ID).
+being_upn = "{name}@example.com"
+owner_upn = "owner@example.com"
+owner_oid = ""                   # owner's Entra object id; fill on the box, keep out of chat
+
+[models]
+session = "opus"                 # main interactive session
+job = "opus"                     # background jobs
+job_small = "sonnet"             # being-job --small
+fast_client = "claude"           # quick replies: claude | codex
+fast_model = "haiku"
+codex_fallback = false           # use Codex when Claude hits its usage limit (needs [access].codex)
+
+# Setup menu: what the Being may use. Everything is off unless switched on here, except the three required rows.
+# Owner rows also need both the Being's and the owner's sessions signed in ([sessions]).
+[access]
+owner_chat = true                # Teams chat with the owner (required)
+claude = true                    # the Being's own Claude seat
+memory = true                    # local memory search (basic-memory)
+teammate_chats = false           # Teams chats with teammates (own chat only)
+group_chats = false              # Teams group chats and channels
+being_mail = false               # the Being's own mailbox
+being_onedrive = false           # the Being's own OneDrive (share by name)
+presence = false                 # set Teams status and photo
+codex = false                    # the Being's own Codex login
+owner_teams_read = false         # owner's Teams, read only
+owner_teams_send = false         # send as the owner after "send Dn"
+owner_mail_read = false          # owner's mail, read only
+owner_mail_send = false          # send mail as the owner after "send Dn"
+owner_files = false              # owner's OneDrive/SharePoint via the owner's browser session, read only
+owner_web = false                # owner's Outlook/Teams web pages, read only
+shared_mailbox_read = false      # a shared mailbox, read replies
+shared_mailbox_send = false      # shared mailbox drafts and reviewed batch send
+owner_channel_posts = false      # channel posts as the owner (list them in [access.detail].channels)
+mail_rules = false               # pre-approved forwarding rules (list them in [access.detail].mail_rules)
+area_approvers = false           # per-area approvers (list them in [access.detail].approvers)
+github_being = false             # the Being's own GitHub account or a repo-limited token
+github_owner = false             # the owner's GitHub login (very high risk)
+azure_devops = false             # pipelines and work items
+cloud_cli = false                # Azure / Google Cloud CLI (very high risk)
+kubernetes = false               # named clusters only ([access.detail].clusters)
+notion = false                   # one named workspace ([access.detail].notion_workspace)
+tunnel = false                   # Cloudflare tunnel for the Being's box (set up from the admin box)
+cloudflare_api = false           # Cloudflare API token on the Being's own box (very high risk)
+app_keys = false                 # single-app keys from the key folder ([access.detail].app_keys)
+model_hubs = false               # model hub keys (download only)
+model_proxy = false              # a local model proxy
+vpn = false                      # VPN to private networks
+device_sync = false              # owner device sync (owner's laptop)
+desktop = false                  # <name>-desktop on the owner's laptop
+
+[access.detail]
+channels = []                    # e.g. ["<team>/<channel>"]
+mail_rules = []                  # e.g. ["from:alerts@example.com subject:Daily report -> owner@example.com"]
+approvers = []                   # e.g. ["person@example.com: finance"]
+clusters = []
+notion_workspace = ""
+app_keys = []                    # file names inside config_dir
+
+# Headless sign-ins: Being and owner each sign in themselves, in separate sessions (Teams and Outlook each).
+# Relative paths are inside the workspace. Owner sessions stay empty (off) until an owner row in [access] is on.
+[sessions]
+being_teams = "ops/teams-kit/state/token-cache.json"     # Being API session, Teams scopes
+being_outlook = "ops/teams-kit/state/being-outlook-cache.json"   # Being API session, mail scopes (its own file)
+being_browser = "{config_dir}/being-browser"             # Being browser profile (0700)
+owner_teams = ""                 # owner API session, Teams scopes, e.g. "ops/teams-kit/state/token-cache-owner.json"
+owner_outlook = ""               # owner API session, mail scopes, e.g. "ops/teams-kit/state/owner-outlook-cache.json"
+owner_browser = ""               # owner browser profile, e.g. "{config_dir}/owner-browser"
+
+[box]
+host = "{name}-box"              # SSH alias for the Being's box through the tunnel
+lan_host = "{name}-lan"          # SSH alias on the office network
+lan_address = "<lan-address>"    # the box's address on the office network
+office_subnet = "<office-cidr>"  # SSH and RDP are allowed from this network only
+ssh_port = 22
+rdp_port = 3389
+
+[tunnel]
+domain = "<domain>"              # Cloudflare zone the hostnames live in
+ssh_host = "{name}-ssh"          # SSH route
+desktop_host = "{name}-desktop"  # RDP route
+hook_host = ""                   # optional Graph webhook route, e.g. "{name}-hook"
+allow_emails = ["owner@example.com"]   # Access policy: who may pass (one-time email code)
+session_duration = "24h"
+token_dir = "~/.config/cloudflared-{name}"   # on the Being's box, Linux disk, 0700; holds the connector token
+service_token = false            # machine token for headless SSH (handed over age-encrypted)
+org_env = "~/.config/<org>/cloudflare.env"   # admin box only: CF_API_TOKEN, CF_ACCOUNT_ID, CF_ZONE_ID
+
+[desktop]
+rdp_user = "{name}"              # RDP and Ubuntu login user on the box
+local_port = 13389               # laptop-side port for the tunnel forwarder
+end_on_close = true              # end the remote session when the viewer closes (false: the reaper ends it later)
+reap_grace_sec = 600             # reaper ends a session after this long with no viewer

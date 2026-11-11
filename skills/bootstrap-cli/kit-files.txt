@@ -1,0 +1,3 @@
+# Files installed by install.sh --with bootstrap-cli over curl (path, or path +x). Keep in sync with git: tests/kit-audit.test.sh.
+README.md
+SKILL.md

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# being-blocker: tell the owner at once that work is blocked, instead of retrying blindly.
+# Usage: README.md "Script reference". Recorded in state/blockers.jsonl for being-status.
+set -euo pipefail
+KIT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+[[ $# -ge 3 ]] || { echo 'usage: being-blocker "<task>" "<why it is stuck, plain words>" "<what you need>" ["<exact error, logged only>"]' >&2; exit 2; }
+set -a
+# shellcheck source=/dev/null
+. "$KIT/.env"
+set +a
+python3 - "$BEING_STATE_DIR/blockers.jsonl" "$1" "$2" "$3" "${4:-}" <<'PY'
+import json,sys,datetime
+f,task,err,need,detail=sys.argv[1:6]
+open(f,"a").write(json.dumps({"at":datetime.datetime.now().astimezone().isoformat(),"task":task,"error":err,"need":need,"detail":detail})+"\n")
+PY
+# Tasks matching a line in state/blocker-quiet.txt are logged only (reported in the final result instead).
+if [[ -s "$BEING_STATE_DIR/blocker-quiet.txt" ]] && grep -qiF -f "$BEING_STATE_DIR/blocker-quiet.txt" <<< "$1"; then echo "blocker logged (quiet)"; exit 0; fi
+esc() { python3 -c 'import html,sys; print(html.escape(sys.argv[1]))' "$1"; }
+printf '<p>🚧 <b>Stuck: %s</b></p><p><b>Why:</b> %s</p><p><b>I need from you:</b> %s</p><p>Until then this one step is paused; everything else keeps running.</p>' \
+  "$(esc "$1")" "$(esc "$2")" "$(esc "$3")" | node "$KIT/teams-send-dm.mjs" --verbatim >/dev/null
+echo "blocker sent to owner"

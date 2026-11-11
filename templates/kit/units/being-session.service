@@ -1,0 +1,18 @@
+# Template: kit-install.sh (skills/runner) writes ~/.config/systemd/user/@BEING_NAME@-session.service. Off until enabled.
+# Keeps the Being's main session alive in tmux; attach with: tmux attach -t @BEING_NAME@
+[Unit]
+Description=@BEING_NAME@ main session (tmux)
+
+[Service]
+Type=forking
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=@WORKSPACE@
+# Change the command to your launcher's; "continue" resumes the last session.
+ExecStart=/usr/bin/env tmux new-session -d -s @BEING_NAME@ -c @WORKSPACE@ "@WORKSPACE@/bin/@BEING_NAME@ claude continue || @WORKSPACE@/bin/@BEING_NAME@ claude"
+ExecStop=/usr/bin/env tmux kill-session -t =@BEING_NAME@
+Restart=on-failure
+RestartSec=10
+UMask=0077
+
+[Install]
+WantedBy=default.target

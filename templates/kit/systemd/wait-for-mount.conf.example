@@ -1,0 +1,5 @@
+# Wait (up to 2 minutes) for the Being's home to be mounted before starting, e.g. a home on an external drive.
+# Drop into ~/.config/systemd/user/<unit>.service.d/wait-for-mount.conf
+[Service]
+TimeoutStartSec=180
+ExecStartPre=/bin/sh -c 'for i in $(seq 120); do [ -x "{{BEING_HOME}}/bin/{{BEING_NAME}}" ] && exit 0; sleep 1; done; exit 1'

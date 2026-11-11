@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# Back up a Being's memory to git: refresh the session registry, snapshot auto-memory, commit, push.
+# Missed days are logged; see usage below and docs/OPERATIONS_KIT.md.
+set -uo pipefail
+USAGE="usage: being-memory-sync run | boot | install [--cron] | uninstall | status
+  run       sync now (what the timer runs); boot = the same, skipped if today already succeeded
+  install   arm a daily systemd user timer (Persistent: a missed run catches up at boot), or cron with --cron
+settings (env): BEING_HOME BEING_NAME BEING_TZ BEING_SYNC_AT (HH:MM, 22:00) BEING_SYNC_REMOTE (origin)
+  BEING_SYNC_BRANCH (current branch) BEING_SYNC_PUSH (1) BEING_SYNC_MAX_MB (50) BEING_SYNC_SCAN (auto|0|1)
+  BEING_AUTO_MEMORY_DIR BEING_SESSION_STORE BEING_LOG_DIR"
+
+SELF="$(readlink -f "$0")"
+HOME_DIR="${BEING_HOME:-$(cd "$(dirname "$SELF")/.." && pwd -P)}"
+enc() { printf '%s' "$1" | sed 's#[^A-Za-z0-9]#-#g'; }
+kit_name() {   # the Being's name from the Teams kit .env, without sourcing the rest of it
+  local f="$HOME_DIR/ops/teams-kit/.env"
+  [ -f "$f" ] && sed -n "s/^BEING_NAME=['\"]\{0,1\}\([a-z0-9-]*\)['\"]\{0,1\}.*/\1/p" "$f" | head -1
+}
+NAME="${BEING_NAME:-$(kit_name)}"; NAME="${NAME:-$(basename "$HOME_DIR")}"
+BOX_TZ="${TZ-}"; BOX_TZ_SET="${TZ+1}"   # cron runs on the box clock, not the Being's zone
+[ -n "${BEING_TZ:-}" ] && export TZ="$BEING_TZ"
+REMOTE="${BEING_SYNC_REMOTE:-origin}"
+AUTO_MEM="${BEING_AUTO_MEMORY_DIR:-$HOME/.claude/projects/$(enc "$HOME_DIR")/memory}"
+OPS="$HOME_DIR/.beings/operations"
+AUDIT="$OPS/sync-history.jsonl"; STATE="$OPS/last-success-date"; LARGE="$OPS/large-files-kept-local.tsv"
+LOG_DIR="${BEING_LOG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/$NAME}"
+MAX_BYTES=$(( ${BEING_SYNC_MAX_MB:-50} * 1024 * 1024 ))
+UNIT="$NAME-memory-sync"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+today="$(date +%F)"
+
+git_() { git -C "$HOME_DIR" "$@"; }
+audit() {
+  python3 -c 'import json,sys; print(json.dumps(dict(zip(["timestamp","date","trigger","status","detail"], sys.argv[1:]))))' \
+    "$(date -Is)" "$today" "$trigger" "$1" "$2" >>"$AUDIT"
+}
+commit_ops() { git_ add -- "$OPS" >/dev/null 2>&1; git_ commit -q -m "$1" >/dev/null 2>&1 || true; }
+
+sync_run() {
+  trigger="$1"
+  [ -d "$HOME_DIR/.git" ] || { echo "being-memory-sync: no git repository at $HOME_DIR" >&2; return 1; }
+  if [ "$trigger" = boot ] && [ "$(cat "$STATE" 2>/dev/null)" = "$today" ]; then return 0; fi
+  local branch; branch="${BEING_SYNC_BRANCH:-$(git_ symbolic-ref --short HEAD 2>/dev/null)}"
+  [ -n "$branch" ] || { echo "being-memory-sync: detached HEAD; set BEING_SYNC_BRANCH" >&2; return 1; }
+  mkdir -p "$OPS" "$LOG_DIR"
+  exec 9>"$(git_ rev-parse --absolute-git-dir)/being-memory-sync.lock"
+  flock -n 9 || { echo "being-memory-sync: another sync is running"; return 0; }
+  exec >>"$LOG_DIR/memory-sync.log" 2>&1
+  echo "[$(date -Is)] start trigger=$trigger branch=$branch"
+
+  # Catch-up audit: one line per scheduled day missed since the last success.
+  if [ -s "$STATE" ]; then
+    local cursor; cursor="$(date -d "$(cat "$STATE") + 1 day" +%F 2>/dev/null || true)"
+    while [ -n "$cursor" ] && [[ "$cursor" < "$today" ]]; do
+      audit catch-up "run for $cursor was missed; its memory is included now"
+      cursor="$(date -d "$cursor + 1 day" +%F)"
+    done
+  fi
+
+  local reg="$HOME_DIR/bin/being-session-registry" rc
+  if [ -x "$reg" ]; then
+    BEING_HOME="$HOME_DIR" "$reg"; rc=$?
+    if [ "$rc" -eq 2 ]; then
+      audit sessions-missing "session transcripts disappeared since the last scan; see .beings/sessions/INDEX.md"
+    elif [ "$rc" -ne 0 ]; then
+      audit capture-failed "session registry failed (exit $rc)"; commit_ops "ops: memory sync failed $today"; return 1
+    fi
+  fi
+
+  if [ -d "$AUTO_MEM" ]; then
+    local dst="$HOME_DIR/.beings/auto-memory"
+    mkdir -p "$dst"
+    if command -v rsync >/dev/null 2>&1; then rsync -a --delete "$AUTO_MEM"/ "$dst"/
+    else find "$dst" -mindepth 1 -delete; cp -a "$AUTO_MEM"/. "$dst"/; fi
+  fi
+
+  audit captured "session registry refreshed, auto-memory snapshot prepared"
+  git_ add -A
+  # Hosting services reject very large files: keep them local and record them.
+  local f
+  while IFS= read -r -d '' f; do
+    if [ "$(stat -c %s "$HOME_DIR/$f" 2>/dev/null || echo 0)" -gt "$MAX_BYTES" ]; then
+      git_ reset -q -- "$f"; printf '%s\t%s\n' "$today" "$f" >>"$LARGE"
+    fi
+  done < <(git_ diff --cached --name-only --diff-filter=AM -z)
+  [ -f "$LARGE" ] && git_ add -- "$LARGE"
+  if ! git_ diff --cached --quiet; then
+    git_ commit -q -m "auto: memory snapshot $today" && echo "committed snapshot"
+  else
+    echo "nothing to commit"
+  fi
+
+  [ "${BEING_SYNC_PUSH:-1}" = 1 ] || { printf '%s\n' "$today" >"$STATE"; audit success "committed locally (push off)"; commit_ops "ops: memory sync $today"; return 0; }
+  if ! git_ remote get-url "$REMOTE" >/dev/null 2>&1; then
+    audit push-failed "no remote '$REMOTE'; snapshot kept locally"; commit_ops "ops: memory sync push failed $today"; return 1
+  fi
+  local guard="$HOME_DIR/bin/publish-check" scan="${BEING_SYNC_SCAN:-auto}"
+  if [ "$scan" = 1 ] || { [ "$scan" = auto ] && [ -x "$guard" ] && command -v gitleaks >/dev/null 2>&1; }; then
+    local range="HEAD --not --remotes=$REMOTE"
+    if ! (cd "$HOME_DIR" && "$guard" "$range"); then
+      audit scan-blocked "publish-check blocked the push; snapshot kept locally"; commit_ops "ops: memory sync blocked $today"; return 1
+    fi
+  fi
+  if git_ push -q "$REMOTE" "$branch"; then
+    printf '%s\n' "$today" >"$STATE"
+    audit success "snapshot pushed to $REMOTE/$branch"
+    commit_ops "ops: memory sync success $today"
+    git_ push -q "$REMOTE" "$branch" || true
+    echo "[$(date -Is)] success"
+  else
+    audit push-failed "snapshot committed locally; retried next run"
+    commit_ops "ops: memory sync push failed $today"
+    echo "[$(date -Is)] push failed; local data kept"
+    return 1
+  fi
+}
+
+install_timer() {
+  local at="${BEING_SYNC_AT:-22:00}" tz=""
+  [[ "$at" =~ ^[0-2][0-9]:[0-5][0-9]$ ]] || { echo "BEING_SYNC_AT must be HH:MM" >&2; return 2; }
+  if [ "${1:-}" = --cron ]; then
+    # Debian/Ubuntu cron ignores CRON_TZ (and it would also shift every later line): convert to the box's own time.
+    if [ -n "${BEING_TZ:-}" ]; then
+      at="$(if [ -n "$BOX_TZ_SET" ]; then export TZ="$BOX_TZ"; else unset TZ; fi; python3 -c 'import sys,datetime as d,zoneinfo as z
+h,m=map(int,sys.argv[1].split(":")); t=d.datetime.now(z.ZoneInfo(sys.argv[2])).replace(hour=h,minute=m)
+print(t.astimezone().strftime("%H:%M"))' "$at" "$BEING_TZ")" || { echo "unknown BEING_TZ $BEING_TZ" >&2; return 2; }
+    fi
+    local line="$((10#${at#*:})) $((10#${at%:*})) * * * $SELF run # $UNIT"
+    local boot="@reboot sleep 300; $SELF boot # $UNIT"
+    { crontab -l 2>/dev/null | grep -v "# $UNIT\$" | grep -v "^CRON_TZ=.* # $UNIT\$"
+      echo "$line"; echo "$boot"; } | crontab -
+    echo "cron entries for $UNIT installed ($at box time${BEING_TZ:+, ${BEING_SYNC_AT:-22:00} $BEING_TZ})"
+    return 0
+  fi
+  [ -n "${BEING_TZ:-}" ] && tz=" $BEING_TZ"
+  mkdir -p "$UNIT_DIR"
+  cat >"$UNIT_DIR/$UNIT.service" <<EOF
+[Unit]
+Description=$NAME memory backup to git
+
+[Service]
+Type=oneshot
+Environment=BEING_HOME=$HOME_DIR
+ExecStart=$SELF run
+EOF
+  cat >"$UNIT_DIR/$UNIT.timer" <<EOF
+[Unit]
+Description=$NAME memory backup, daily; Persistent catches up after a missed run
+
+[Timer]
+OnCalendar=*-*-* $at:00$tz
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl --user daemon-reload && systemctl --user enable --now "$UNIT.timer" \
+    && echo "timer $UNIT.timer armed ($at$tz); run 'loginctl enable-linger $USER' so it runs while logged out"
+}
+
+uninstall_timer() {
+  systemctl --user disable --now "$UNIT.timer" 2>/dev/null || true
+  rm -f "$UNIT_DIR/$UNIT.service" "$UNIT_DIR/$UNIT.timer"
+  systemctl --user daemon-reload 2>/dev/null || true
+  crontab -l 2>/dev/null | grep -q "# $UNIT\$" && { crontab -l | grep -v "# $UNIT\$" | crontab -; }
+  echo "$UNIT schedule removed"
+}
+
+status() {
+  echo "last success: $(cat "$STATE" 2>/dev/null || echo never)"
+  [ -f "$AUDIT" ] && tail -n 5 "$AUDIT"
+  [ -f "$LARGE" ] && echo "large files kept local: $(wc -l <"$LARGE")"
+  return 0
+}
+
+case "${1:-run}" in
+  run) sync_run scheduled ;;
+  boot) sync_run boot ;;
+  install) install_timer "${2:-}" ;;
+  uninstall) uninstall_timer ;;
+  status) status ;;
+  -h|--help|help) echo "$USAGE" ;;
+  *) echo "$USAGE" >&2; exit 2 ;;
+esac

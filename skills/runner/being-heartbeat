@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# being-heartbeat [--job <job.json>]: nudge the Being's main tmux session with the heartbeat prompt (timer), or with a
+# "job finished" note (as BEING_ON_JOB_DONE). Skips quietly when the session is not running.
+set -euo pipefail
+export PATH="$HOME/.local/bin:$PATH"
+ENVF="${BEING_RUNNER_ENV:-$HOME/.config/being-runner/env}"
+# The file gives defaults; BEING_* already in the environment win.
+keep="$(declare -px | grep -E '^declare -x BEING_' || true)"
+set -a; [[ -f "$ENVF" ]] && . "$ENVF"; set +a; eval "$keep"
+msg="${BEING_HEARTBEAT_PROMPT:-Heartbeat: read .beings/HEARTBEAT.md and act on it.}"
+if [[ "${1:-}" == --job ]]; then
+  msg="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))
+print("Background job %s (%s) finished: %s. Check %s and deliver the result." % (d["id"], d["name"], d.get("status","?"), sys.argv[1][:-5] + ".result.md"))' "${2:?--job needs the job json}")"
+elif [[ -n "${BEING_HEARTBEAT_CMD:-}" ]]; then read -ra cmd <<<"$BEING_HEARTBEAT_CMD"; exec "${cmd[@]}"; fi
+S="${BEING_SESSION:?set BEING_SESSION in $ENVF}"
+tmux has-session -t "=$S" 2>/dev/null || { echo "no tmux session $S; skipped"; exit 0; }
+tmux send-keys -t "=$S:" -l "$msg"
+tmux send-keys -t "=$S:" Enter
+echo "nudge sent to $S"

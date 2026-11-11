@@ -1,0 +1,15 @@
+# Template: webhook/kit-install.sh writes this to ~/.config/systemd/user/ (@KIT@ = the Teams kit dir). Off until enabled.
+[Unit]
+Description=Graph change-notification receiver (127.0.0.1 only)
+
+[Service]
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment="HOOK_STATE=@HOOK_STATE@"
+EnvironmentFile=%h/.config/graph-webhook/env
+ExecStart=/usr/bin/env node @KIT@/webhook/graph-webhook.mjs
+Restart=always
+RestartSec=3
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -10,16 +10,20 @@ learn about the project. This only happens once.
 
 ## Every Session
 
-Read these files silently before every response:
+Read these silently, in this order, before your first response (skip any that do not exist):
 
-1. `.beings/SOUL.md` — your identity, personality, and values
-2. `.beings/AGENTS.md` — how you work (operating instructions)
-3. `.beings/MEMORY.md` — your project memory (architecture, decisions, context)
-4. `.beings/CONVENTIONS.md` — coding rules and patterns
-5. `.beings/GOALS.md` — current priorities
-6. `.beings-local/USER.md` (if exists) — who you're working with
-7. `.beings-local/PREFERENCES.md` (if exists) — their work style
-8. Recent files in `.beings/memory/` — what happened lately
+1. `.beings/GUARDRAILS.md` — rules that override everything else
+2. `.beings/SOUL.md` — your identity, personality, and values
+3. `.beings/AGENTS.md` — how you work (operating instructions)
+4. `.beings/USER.md`, `.beings-local/USER.md`, `.beings-local/PREFERENCES.md` — who you work with and how
+5. `.beings/memory/` — today's and yesterday's daily logs
+6. `.beings/MEMORY.md` — long-term memory index; then the auto-memory index
+   `.beings/auto-memory-live/MEMORY.md` (or its git snapshot `.beings/auto-memory/MEMORY.md`), opening linked
+   topic files only when relevant
+7. `.beings/GOALS.md` — current priorities
+8. `.beings/AUTONOMY.md` (and `.beings/AUTONOMY-MATRIX.md`) — what you may decide alone
+9. `.beings/CONVENTIONS.md` — working rules and patterns
+10. `memory-graph/` — search it for the topic at hand; read the two most recent notes in `memory-graph/sessions/`
 
 Do not announce you're reading these. Just read and proceed.
 
@@ -54,17 +58,18 @@ You are a co-developer, not a servant.
 
 ## Memory Management (For Cursor and Codex — No Hooks)
 
-If you are running in an environment without hooks (Cursor, Codex), manage memory manually:
-
-**Session start:** Read the two most recent files in `memory-graph/sessions/` before
-responding to anything. This restores context from prior sessions.
+If you are running in an environment without hooks (Cursor, Codex), manage memory manually. Session start is
+step 10 above; there is no separate startup list.
 
 **During work:** After any significant decision, discovery, or build — write a note to
 `memory-graph/`. Create the markdown file directly or use:
-`basic-memory write-note "title" --folder decisions/ --content "..."`
+`basic-memory tool write-note --title "title" --folder decisions --content "..."`
 
 **Session end:** Write a session summary to `memory-graph/sessions/YYYY-MM-DD.md`
 covering: what was built, decisions made, open questions.
+
+**Auto-memory:** Claude Code keeps one small file per fact plus a `MEMORY.md` index (step 6). Codex reads the
+same files; when you learn a durable fact, add or update one file there and its one-line index entry.
 
 ## Autonomy
 

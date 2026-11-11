@@ -1,0 +1,75 @@
+# Owner access: lets the Being use the owner's own Microsoft 365 sessions for named jobs.
+# Copy to owner-access.toml (next to the kit scripts, mode 600). EVERYTHING IS OFF until set to true here.
+# Read OWNER-ACCESS.md first. Check with: node owner-access-doctor.mjs
+
+[owner_access]
+enabled = false                            # master switch; every ability below also needs its own true
+owner_browser_profile = "state/owner-browser"   # owner's headless browser profile (0700), relative to the kit
+being_browser_profile = "state/being-browser"   # the Being's own browser profile, never shared with the owner's
+report_chat = ""                           # where as-owner reports go; empty = the owner's 1:1 with the Being
+
+[abilities]
+# Research, read only
+owner_teams_read = false            # owner-read (also needs BEING_OWNER_DELEGATE=1 in the kit .env)
+owner_mail_read = false             # owner-mail (same)
+owner_files = false                 # owner-web search | shared | ls | get
+owner_web_pages = false             # owner-web open (Outlook/Teams web as text, no clicks)
+shared_mailbox_read = false         # shared-inbox-monitor
+# Act after approval
+owner_teams_send_approved = false   # draft-for-owner + "send Dn" (approve.mjs)
+owner_mail_send_approved = false    # same, for mail
+shared_mailbox_drafts = false       # create and edit the Being's own unsent drafts
+shared_mailbox_send = false         # send a named, reviewed batch after "go <batch> <fingerprint>"
+channel_posts = false               # post a reviewed batch in an allowed channel after a go
+# Act on a pre-approved rule
+mail_forward_rules = false          # [[forward_rules]] below
+# Who may approve
+area_approvers = false              # [approvers] below count as well as the owner
+
+[owner_web]
+my_host = "https://<org>-my.sharepoint.com"
+root_host = "https://<org>.sharepoint.com"
+chrome = ""                         # empty = OWNER_WEB_CHROME, else google-chrome on PATH
+
+[shared_mailbox]
+address = ""                        # e.g. team@example.com; the owner must already have access to it
+area = "shared_mailbox"             # approver area for batch sends
+folders = ["inbox", "junkemail"]    # what the monitor reads
+send_gap_seconds = 3
+route = "graph"                     # "graph" (owner API, needs Mail.ReadWrite.Shared consent) or "browser" (owner's Outlook web)
+
+[channel_posts]
+allowed = []                        # exact "<team id>/<channel id>" pairs the owner allows, e.g. ["<team id>/19:<channel>@thread.tacv2"]
+area = "channel_posts"
+route = "graph"                     # "graph" (owner API, needs ChannelMessage.Send consent) or "browser" (owner's Teams web)
+browser_folders = []                # browser route only: allowed channel folder URLs, e.g.
+                                    # ["https://<org>.sharepoint.com/sites/<team>/Shared Documents/<channel>"]
+
+[routes]
+# Per-ability override of the section's route, e.g. drafts in the browser but sends through the API:
+# shared_mailbox_drafts = "browser"
+# shared_mailbox_send = "graph"
+# channel_posts = "browser"
+
+[approvers]
+# area = ["person@example.com"]     the owner can always approve; these people too, for that area only
+# shared_mailbox = ["teammate@example.com"]
+
+# One block per rule. Matching mail in the owner's inbox goes to the ONE allowed person who asked for it within the window.
+# [[forward_rules]]
+# name = "app-login"                       # also the pause file name: state/owner-access/forward-app-login.pause
+# sender_domains = ["example.com"]         # mail from these domains (or subdomains) only
+# subject_patterns = ["sign in", "verification code", "one-time code"]
+# requesters_domain = "example.com"        # who may ask (not the owner, not the Being) ...
+# requesters = []                          # ... or an explicit list instead
+# request_service_words = ["exampleapp"]   # a strict ask names the service and an action word
+# request_action_words = ["forward", "send", "mail", "link", "code", "login"]
+# loose_forward_words = ["forward", "send"]          # loose asks (no service named) count only shortly around the mail
+# loose_object_words = ["mail", "link", "code", "otp"]
+# window_hours = 3
+# loose_before_min = 5
+# loose_after_min = 15
+# keep_hours = 48
+# block = []                               # never forward to these (address, local part or first name)
+# code_dm = false                          # true = also DM a one-time code to the requester's 1:1 with the Being (never logged)
+# code_fresh_min = 30

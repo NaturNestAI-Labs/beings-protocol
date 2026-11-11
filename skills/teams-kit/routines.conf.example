@@ -1,0 +1,6 @@
+# being-routine: one routine per line: <name> <chat[,chat...]>   ("owner" = OWNER_DM_CHAT, the owner's 1:1)
+# Copy to routines.conf (gitignored). Each <name> is a mode described in BEING_ROUTINE_SPEC.
+brief         owner
+captains-log  owner
+update        19:leadership-chat-id@thread.v2
+teamreport    19:leadership-chat-id@thread.v2

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# owner-web: READ-ONLY OneDrive/SharePoint/Outlook/Teams web through the owner's own browser session (owner-access).
+#   owner-web check | search <text> [--top N] | shared | ls <folder url> | get <url> [--save dir] | open <m365 url> [--wait S]
+set -euo pipefail
+KIT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+set -a
+# shellcheck source=/dev/null
+. "$KIT/.env"
+set +a
+# Same grant check as owner-read: full, owner-only or routine grants only; teammate lanes are refused.
+node "$KIT/scope.mjs" owner-read-ok || { echo "blocked: only owner-lane runs may use the owner's browser" >&2; exit 3; }
+exec node "$KIT/owner-web.mjs" "$@"

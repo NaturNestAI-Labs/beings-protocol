@@ -1,0 +1,4 @@
+# Cutover gate: a box holding the STANDBY flag never starts this service, so two boxes never answer at once.
+# Drop into ~/.config/systemd/user/<unit>.service.d/standby-gate.conf; `touch <flag>` on the standby box.
+[Unit]
+ConditionPathExists=!{{BEING_HOME}}/ops/teams-kit/state/STANDBY

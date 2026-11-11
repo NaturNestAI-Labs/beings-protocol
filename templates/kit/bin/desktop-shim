@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# {{TOOL}} shim: up | down | status | autostart on|off like app runners; anything else goes to the real {{TOOL}}.
+# {{TOOL_VAR}}_UNIT is its system service (optional), {{TOOL_VAR}}_AUTOSTART its tray .desktop file name (optional).
+set -euo pipefail
+TOOL="{{TOOL}}"
+UNIT="${{{TOOL_VAR}}_UNIT:-{{UNIT}}}"
+DESKTOP="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/${{{TOOL_VAR}}_AUTOSTART:-{{AUTOSTART}}}"
+SELF="$(readlink -f "$0")"
+
+real() {   # the first $TOOL on PATH that is not this shim
+  local p; while IFS= read -r p; do [ "$(readlink -f "$p")" != "$SELF" ] && { echo "$p"; return; }; done < <(type -aP "$TOOL")
+  echo "$TOOL: real binary not found on PATH" >&2; exit 127
+}
+svc() { [ -n "$UNIT" ] || return 0; sudo systemctl "$@" "$UNIT"; }
+
+case "${1:-}" in
+  up) svc start; nohup "$(real)" >/dev/null 2>&1 & echo "$TOOL: started" ;;
+  down) svc stop; pkill -x "$TOOL" 2>/dev/null || true; echo "$TOOL: stopped" ;;
+  status)
+    if pgrep -x "$TOOL" >/dev/null; then echo "$TOOL: running"; else echo "$TOOL: stopped"; fi
+    [ -n "$UNIT" ] && echo "  service at boot: $(systemctl is-enabled "$UNIT" 2>/dev/null || true)"
+    if [ -f "$DESKTOP" ] && ! grep -q '^Hidden=true' "$DESKTOP"; then echo "  tray at login: ARMED"; else echo "  tray at login: off"; fi ;;
+  autostart)
+    case "${2:-}" in
+      on) svc enable; [ -f "$DESKTOP" ] && sed -i '/^Hidden=/d' "$DESKTOP"; echo "$TOOL: starts at boot" ;;
+      off) svc disable
+           if [ -f "$DESKTOP" ]; then sed -i '/^Hidden=/d' "$DESKTOP"; echo 'Hidden=true' >>"$DESKTOP"; fi
+           echo "$TOOL: no longer starts at boot" ;;
+      *) echo "usage: $TOOL autostart on|off" >&2; exit 2 ;;
+    esac ;;
+  *) exec "$(real)" "$@" ;;
+esac

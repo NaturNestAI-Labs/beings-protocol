@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""being-config: read a Being's being.toml (docs/CONFIG.md) for shell scripts.
+
+  being-config [--file F] [--raw] get <section.key> [default]   value ("true"/"false", lists one per line)
+  being-config [--file F] access                                 every [access] key: on|off
+  being-config [--file F] check                                  validate; exit 1 on errors
+
+File: --file, else $BEING_CONFIG, else ./being.toml. "{name}", "{config_dir}", "{workspace}", "{linux_user}" are
+filled from [being]; a leading "~/" becomes $HOME unless --raw (paths meant for another machine).
+"""
+import os, re, sys
+
+try:
+    import tomllib
+except ImportError:  # python < 3.11
+    sys.exit("being-config: needs python 3.11+ (tomllib)")
+
+ACCESS_KEYS = """owner_chat claude memory teammate_chats group_chats being_mail being_onedrive presence codex
+owner_teams_read owner_teams_send owner_mail_read owner_mail_send owner_files owner_web shared_mailbox_read
+shared_mailbox_send owner_channel_posts mail_rules area_approvers github_being github_owner azure_devops cloud_cli
+kubernetes notion tunnel cloudflare_api app_keys model_hubs model_proxy vpn device_sync desktop""".split()
+REQUIRED_ON = {"owner_chat"}
+OWNER_ROWS = {k for k in ACCESS_KEYS if k.startswith("owner_") and k != "owner_chat"} | {"shared_mailbox_read", "shared_mailbox_send", "mail_rules"}
+SECTIONS = {"being", "m365", "models", "access", "sessions", "box", "tunnel", "desktop", "kit"}
+PLACEHOLDERS = ("name", "linux_user", "config_dir", "workspace")
+
+
+def load(path):
+    with open(path, "rb") as f:
+        return tomllib.load(f)
+
+
+def fill(value, cfg, raw):
+    if isinstance(value, list):
+        return [fill(v, cfg, raw) for v in value]
+    if not isinstance(value, str):
+        return value
+    being = cfg.get("being", {})
+    for _ in range(3):  # placeholders may refer to each other (config_dir uses {name})
+        for k in PLACEHOLDERS:
+            if k in being:
+                value = value.replace("{%s}" % k, str(being[k]))
+    if not raw and value.startswith("~/"):
+        value = os.path.join(os.path.expanduser("~"), value[2:])
+    return value
+
+
+def lookup(cfg, dotted):
+    cur = cfg
+    for part in dotted.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            raise KeyError(dotted)
+        cur = cur[part]
+    return cur
+
+
+def show(v):
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, list):
+        return "\n".join(show(x) for x in v)
+    if isinstance(v, dict):
+        raise SystemExit("being-config: that key is a table; ask for one of its keys")
+    return str(v)
+
+
+def check(cfg):
+    errs, warns = [], []
+    for s in cfg:
+        if s not in SECTIONS and s != "schema":
+            warns.append(f"unknown section [{s}]")
+    name = cfg.get("being", {}).get("name", "")
+    if not re.fullmatch(r"[a-z][a-z0-9-]*", name or ""):
+        errs.append("[being].name must be lowercase letters, digits or dashes")
+    access = cfg.get("access", {})
+    for k in access:
+        if k != "detail" and k not in ACCESS_KEYS:
+            errs.append(f"[access].{k}: unknown key (see docs/CONFIG.md)")
+    for k in REQUIRED_ON:
+        if access.get(k) is not True:
+            errs.append(f"[access].{k} is required and must be true")
+    for k, v in access.items():
+        if k != "detail" and not isinstance(v, bool):
+            errs.append(f"[access].{k} must be true or false")
+    sessions = cfg.get("sessions", {})
+    owner_on = any(access.get(k) for k in OWNER_ROWS)
+    owner_sessions = [k for k in ("owner_teams", "owner_outlook", "owner_browser") if sessions.get(k)]
+    if owner_on and not (sessions.get("owner_teams") or sessions.get("owner_browser")):
+        errs.append("owner access is on but no owner session is set in [sessions]")
+    if owner_sessions and not owner_on:
+        warns.append(f"owner sessions set ({', '.join(owner_sessions)}) but no owner row is on in [access]")
+    for b, o in (("being_teams", "owner_teams"), ("being_outlook", "owner_outlook"), ("being_browser", "owner_browser")):
+        if sessions.get(o) and sessions.get(o) in (sessions.get("being_teams"), sessions.get("being_outlook"), sessions.get("being_browser")):
+            errs.append(f"[sessions].{o} must not share a path with a Being session")
+    if access.get("github_owner") and not access.get("github_being"):
+        warns.append("github_owner is on: prefer the Being's own account or a repo-limited token (github_being)")
+    for w in warns:
+        print(f"  WARN {w}")
+    for e in errs:
+        print(f"  FAIL {e}")
+    if not errs:
+        print("  ok   config valid")
+    return 1 if errs else 0
+
+
+def main(argv):
+    path, raw = os.environ.get("BEING_CONFIG") or "being.toml", False
+    while argv and argv[0].startswith("--"):
+        if argv[0] == "--file" and len(argv) > 1:
+            path, argv = argv[1], argv[2:]
+        elif argv[0] == "--raw":
+            raw, argv = True, argv[1:]
+        else:
+            sys.exit(f"being-config: unknown option {argv[0]}")
+    if not argv:
+        sys.exit(__doc__.strip())
+    try:
+        cfg = load(path)
+    except FileNotFoundError:
+        sys.exit(f"being-config: {path} not found (copy templates/being.toml.example)")
+    except tomllib.TOMLDecodeError as e:
+        sys.exit(f"being-config: {path}: {e}")
+    cmd = argv[0]
+    if cmd == "get" and len(argv) in (2, 3):
+        try:
+            print(show(fill(lookup(cfg, argv[1]), cfg, raw)))
+        except KeyError:
+            if len(argv) == 3:
+                print(fill(argv[2], cfg, raw))
+            else:
+                sys.exit(f"being-config: {argv[1]} not set in {path}")
+        return 0
+    if cmd == "access":
+        access = cfg.get("access", {})
+        for k in ACCESS_KEYS:
+            print(f"{k:22} {'on' if access.get(k) is True else 'off'}")
+        return 0
+    if cmd == "check":
+        return check(cfg)
+    sys.exit(__doc__.strip())
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

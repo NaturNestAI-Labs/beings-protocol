@@ -1,0 +1,11 @@
+# Copy to ~/.config/systemd/user/{{BEING_NAME}}-heartbeat.timer, then: systemctl --user enable --now {{BEING_NAME}}-heartbeat.timer
+[Unit]
+Description={{BEING_NAME}} heartbeat every 30 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

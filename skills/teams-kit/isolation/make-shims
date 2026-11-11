@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# make-shims [DIR]: build the model-side kit dir (default isolation/shims). Every file is a kit-client: same names as the
+# kit commands the prompts and allowlists use, no kit code, no .env, no state. being-launch mounts it AT the kit path.
+set -euo pipefail
+KIT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+D=${1:-$KIT/isolation/shims}
+mkdir -p "$D.new"; rm -rf "$D.new"/*
+install -m 0644 "$KIT/kit-client.mjs" "$D.new/kit-client.mjs"
+for m in teams-send-dm teams-fetch-attachment mail draft-for-owner; do
+  printf "#!/usr/bin/env node\n// shim: %s through the run's kit-broker (isolation/README.md)\nimport './kit-client.mjs';\n" "$m" >"$D.new/$m.mjs"
+  chmod 0755 "$D.new/$m.mjs"
+done
+for c in being-job being-status being-blocker being-board being-steer being-sessions owner-read owner-mail; do
+  printf "#!/usr/bin/env node\n// shim: %s through the run's kit-broker (isolation/README.md)\nimport('./kit-client.mjs');\n" "$c" >"$D.new/$c"
+  chmod 0755 "$D.new/$c"
+done
+# The hive MCP server (stdio) for owner-lane sessions: .mcp.json points at <kit>/hive-mcp-stdio in both layouts.
+printf "#!/usr/bin/env node\n// shim: the hive MCP server (stdio) through the run's kit-broker\nprocess.env.KIT_CLIENT_VERB = 'hive-mcp';\nimport('./kit-client.mjs');\n" >"$D.new/hive-mcp-stdio"
+chmod 0755 "$D.new/hive-mcp-stdio"
+# The teammate PreToolUse hook (claude --settings names <kit>/team-fence.py): kept as a second layer inside the sandbox.
+[[ -f $KIT/team-fence.py ]] && install -m 0755 "$KIT/team-fence.py" "$D.new/team-fence.py"
+chmod 0755 "$D.new"
+rm -rf "$D"; mv "$D.new" "$D"
+echo "shims: $D ($(ls "$D" | wc -l) files)"

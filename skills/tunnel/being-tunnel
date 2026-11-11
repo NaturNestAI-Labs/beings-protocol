@@ -1,0 +1,543 @@
+#!/usr/bin/env python3
+"""being-tunnel: one Cloudflare tunnel per Being box, run from the admin box. Usage and token rules: README.md.
+
+  being-tunnel create <being> [--no-desktop] [--keep-partial] [--dry-run]
+  being-tunnel status <being>
+  being-tunnel delete <being> [--yes]
+  being-tunnel rotate <being>                          new connector secret, pushed to the box
+  being-tunnel service-token <being> (--to <ssh alias> | --out <file.age> --recipient <ssh pubkey file>) | --revoke
+  being-tunnel hook <being> --ranges <file> [--port 8790] | --remove
+Common: --config <being.toml> (default ./being.toml), --record <file> (default ./tunnel-<being>.json), --box <ssh alias>.
+"""
+import argparse, base64, hashlib, ipaddress, json, os, re, secrets, shlex, stat, subprocess, sys, tempfile, time
+import urllib.error, urllib.request
+
+try:
+    import tomllib
+except ImportError:
+    sys.exit("being-tunnel: needs python 3.11+ (tomllib)")
+
+API = os.environ.get("CF_API_BASE", "https://api.cloudflare.com/client/v4").rstrip("/")
+LOCAL_FS_BAD = {"ntfs", "ntfs3", "fuseblk", "vfat", "msdos", "exfat", "9p", "v9fs", "cifs", "smb2", "nfs", "nfs4"}
+HERE = os.path.dirname(os.path.realpath(__file__))
+
+
+def die(msg, code=1):
+    print(f"being-tunnel: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def say(msg):
+    print(f"  {msg}", flush=True)
+
+
+# ---------- settings ----------
+
+def load_settings(a):
+    cfg = {}
+    if os.path.exists(a.config):
+        with open(a.config, "rb") as f:
+            cfg = tomllib.load(f)
+    elif a.config != "being.toml":
+        die(f"{a.config} not found")
+    being = dict(cfg.get("being", {}), name=a.being)
+
+    def fill(v):
+        if isinstance(v, list):
+            return [fill(x) for x in v]
+        if not isinstance(v, str):
+            return v
+        for _ in range(3):
+            for k in ("name", "linux_user", "config_dir", "workspace"):
+                if k in being:
+                    v = v.replace("{%s}" % k, str(being[k]))
+        return v
+
+    t = {k: fill(v) for k, v in cfg.get("tunnel", {}).items()}
+    box = {k: fill(v) for k, v in cfg.get("box", {}).items()}
+    s = {
+        "being": a.being,
+        "domain": t.get("domain", ""),
+        "ssh_host": t.get("ssh_host", f"{a.being}-ssh"),
+        "desktop_host": t.get("desktop_host", f"{a.being}-desktop"),
+        "hook_host": t.get("hook_host") or f"{a.being}-hook",
+        "allow": t.get("allow_emails", []),
+        "session": t.get("session_duration", "24h"),
+        "token_dir": t.get("token_dir", f"~/.config/cloudflared-{a.being}"),
+        "org_env": os.path.expanduser(a.org_env or t.get("org_env", "")),
+        "box": a.box or box.get("host", ""),
+        "ssh_port": int(box.get("ssh_port", 22)),
+        "rdp_port": int(box.get("rdp_port", 3389)),
+    }
+    if "<" in s["domain"] or not re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", s["domain"] or ""):
+        die("set [tunnel].domain in being.toml (the Cloudflare zone)")
+    return s
+
+
+def load_api_env(path):
+    """CF_API_TOKEN / CF_ACCOUNT_ID / CF_ZONE_ID from the admin box only; values are never printed."""
+    if not path or "<" in path:
+        die("set [tunnel].org_env (e.g. ~/.config/<org>/cloudflare.env) or pass --org-env")
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        die(f"{path} not found (admin box only; see README.md)")
+    if stat.S_IMODE(st.st_mode) & 0o077:
+        die(f"{path} is readable by others; chmod 600 it first")
+    env = {}
+    for line in open(path):
+        m = re.match(r"\s*(?:export\s+)?([A-Z0-9_]+)=(.*)$", line)
+        if m:
+            v = m.group(2).strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+                v = v[1:-1]
+            env[m.group(1)] = v
+    for k in ("CF_API_TOKEN", "CF_ACCOUNT_ID", "CF_ZONE_ID"):
+        if not env.get(k):
+            die(f"{k} missing in {path}")
+    return env
+
+
+# ---------- Cloudflare API ----------
+
+class CF:
+    def __init__(self, env, dry=False):
+        self._token, self.acct, self.zone, self.dry = env["CF_API_TOKEN"], env["CF_ACCOUNT_ID"], env["CF_ZONE_ID"], dry
+        self._fake = 0
+
+    def call(self, method, path, body=None, ok404=False):
+        if self.dry and (method != "GET" or "/dry-" in path):
+            self._fake += 1
+            say(f"[dry-run] {method} {path}")
+            return {"id": f"dry-{self._fake}", "policies": [{"id": f"dry-p{self._fake}"}], "config": {"ingress": []}}
+        req = urllib.request.Request(API + path, method=method, data=None if body is None else json.dumps(body).encode(),
+                                     headers={"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                data = json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            if e.code == 404 and ok404:
+                return None
+            try:
+                errs = json.loads(e.read() or b"{}").get("errors", [])
+            except ValueError:
+                errs = []
+            raise RuntimeError(f"{method} {path}: HTTP {e.code} {'; '.join(str(x.get('message', x)) for x in errs)[:300]}")
+        if not data.get("success", True):
+            raise RuntimeError(f"{method} {path}: {data.get('errors')}")
+        return data.get("result")
+
+    a = property(lambda self: f"/accounts/{self.acct}")
+    z = property(lambda self: f"/zones/{self.zone}")
+
+    def config(self, tid):
+        """Fresh read right before every change: two writers once overwrote each other minutes apart."""
+        r = self.call("GET", f"{self.a}/cfd_tunnel/{tid}/configurations") or {}
+        return (r.get("config") or {}) if isinstance(r, dict) else {}
+
+    def put_ingress(self, tid, add=(), remove=()):
+        cfg = self.config(tid)
+        rules = [r for r in cfg.get("ingress", []) if r.get("hostname") and r["hostname"] not in remove]
+        names = {r["hostname"] for r in rules}
+        rules += [r for r in add if r["hostname"] not in names]
+        rules.append({"service": "http_status:404"})   # catch-all: anything else is "not found"
+        cfg["ingress"] = rules
+        self.call("PUT", f"{self.a}/cfd_tunnel/{tid}/configurations", {"config": cfg})
+
+    def dns_exists(self, fqdn):
+        return bool(self.call("GET", f"{self.z}/dns_records?name={fqdn}"))
+
+    def connector_token(self, tid):
+        return self.call("GET", f"{self.a}/cfd_tunnel/{tid}/token")
+
+
+# ---------- record (ids only, never secrets) ----------
+
+class Record:
+    def __init__(self, path, being, dry=False):
+        self.path, self.dry = path, dry   # a dry run never writes: its fake ids would block the real create
+        self.d = json.load(open(path)) if os.path.exists(path) else {"being": being, "tunnel": None, "apps": {},
+                                                                      "dns": {}, "routes": [], "service_tokens": {}, "log": []}
+
+    def save(self, event=None):
+        if self.dry:
+            return
+        if event:
+            self.d["log"].append({"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "event": event})
+        self.d["rollback"] = [
+            f"being-tunnel delete {self.d['being']} --record {os.path.basename(self.path)}",
+            "manual order if the tool is unavailable: delete DNS records, remove the ingress rules (GET the config first),"
+            " stop the connector unit on the box and remove its token file, delete the tunnel, then the Access apps"
+            " and service tokens listed here",
+        ]
+        tmp = self.path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(self.d, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, self.path)
+
+
+# ---------- the Being's box over SSH (secrets travel on stdin only) ----------
+
+def ssh(box, script, args=(), stdin=None, check=True):
+    remote = "bash -c " + shlex.quote(script) + " _ " + " ".join(shlex.quote(str(x)) for x in args)
+    r = subprocess.run(["ssh", "-o", "BatchMode=yes", box, remote], input=stdin, capture_output=True)
+    if check and r.returncode != 0:
+        raise RuntimeError(f"ssh {box}: exit {r.returncode}: {r.stderr.decode(errors='replace').strip()[:300]}")
+    return r.stdout.decode(errors="replace")
+
+
+REMOTE_PREFLIGHT = r"""set -euo pipefail
+d="${1/#\~/$HOME}"; p="$d"; while [[ ! -e "$p" ]]; do p="$(dirname "$p")"; done
+fs="$(stat -f -c %T "$p")"; echo "fs=$fs"
+command -v cloudflared >/dev/null && echo cloudflared=yes || echo cloudflared=no
+loginctl show-user "$(id -un)" -p Linger 2>/dev/null | grep -q '=yes' && echo linger=yes || echo linger=no"""
+
+REMOTE_TOKEN = r"""set -euo pipefail
+umask 077; d="${1/#\~/$HOME}"; mkdir -p "$d"; chmod 700 "$d"
+cat >"$d/token.tmp"; [[ -s "$d/token.tmp" ]] || { rm -f "$d/token.tmp"; echo "empty token" >&2; exit 1; }
+chmod 600 "$d/token.tmp"; mv -f "$d/token.tmp" "$d/token"
+[[ "$(stat -c %a "$d/token")" == 600 && "$(stat -c %a "$d")" == 700 ]] || { echo "bad mode" >&2; exit 1; }"""
+
+REMOTE_UNIT = r"""set -euo pipefail
+u="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"; mkdir -p "$u"; cat >"$u/$1"
+systemctl --user daemon-reload; systemctl --user enable "$1" >/dev/null 2>&1; systemctl --user restart "$1"
+sleep 3; systemctl --user is-active "$1" """
+
+REMOTE_STOP = r"""d="${2/#\~/$HOME}"
+systemctl --user disable --now "$1" >/dev/null 2>&1 || true
+rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$1"; systemctl --user daemon-reload || true
+[[ -f "$d/token" ]] && { shred -u "$d/token" 2>/dev/null || rm -f "$d/token"; }; echo stopped"""
+
+
+def unit_text(s):
+    tpl = open(os.path.join(HERE, "cloudflared-tunnel.service.example")).read()
+    tf = s["token_dir"].replace("~/", "%h/", 1) + "/token"
+    return tpl.replace("@BEING_NAME@", s["being"]).replace("@TOKEN_FILE@", tf)
+
+
+def push_connector(cf, s, rec, tid):
+    box = s["box"] or die("no box: set [box].host or pass --box")
+    token = cf.connector_token(tid)
+    if not isinstance(token, str) or len(token) < 20:
+        raise RuntimeError("connector token missing from the API answer")
+    ssh(box, REMOTE_TOKEN, [s["token_dir"]], stdin=token.encode())
+    del token
+    say(f"connector token written on {box} ({s['token_dir']}/token, 0600, dir 0700)")
+    state = ssh(box, REMOTE_UNIT, [f"cloudflared-{s['being']}.service"], stdin=unit_text(s).encode(), check=False).strip()
+    say(f"connector unit cloudflared-{s['being']}.service: {state or 'unknown'}")
+    rec.d["connector"] = {"box": box, "unit": f"cloudflared-{s['being']}.service", "token_dir": s["token_dir"]}
+
+
+def preflight_box(s):
+    box = s["box"] or die("no box: set [box].host or pass --box")
+    out = dict(l.split("=", 1) for l in ssh(box, REMOTE_PREFLIGHT, [s["token_dir"]]).split() if "=" in l)
+    if out.get("fs") in LOCAL_FS_BAD:
+        die(f"{s['token_dir']} on {box} is on a {out['fs']} disk where chmod does not hold; use a Linux disk path")
+    if out.get("cloudflared") != "yes":
+        die(f"cloudflared is not installed on {box}")
+    if out.get("linger") != "yes":
+        say(f"WARN linger is off on {box}: the connector stops at logout and stays down after a reboot "
+            f"(admin: sudo loginctl enable-linger <user>)")
+
+
+# ---------- Access ----------
+
+def email_policy(s):
+    if not s["allow"]:
+        die("set [tunnel].allow_emails: the Access policy needs at least one person")
+    return {"name": f"{s['being']} allow", "decision": "allow", "precedence": 1,
+            "include": [{"email": {"email": e}} for e in s["allow"]]}
+
+
+def create_app(cf, s, fqdn, policy):
+    r = cf.call("POST", f"{cf.a}/access/apps", {
+        "name": fqdn, "domain": fqdn, "type": "self_hosted", "session_duration": s["session"],
+        "app_launcher_visible": False, "auto_redirect_to_identity": True, "http_only_cookie_attribute": True,
+        "policies": [policy]})
+    if not r or not r.get("id"):
+        raise RuntimeError(f"Access app for {fqdn} not created")
+    if not cf.dry and not r.get("policies"):
+        raise RuntimeError(f"Access app for {fqdn} came back without its policy")
+    return {"id": r["id"], "policies": [p.get("id") for p in r.get("policies", [])]}
+
+
+def probe(fqdn):
+    """Unauthenticated request: Access must answer (302 to its login or 403) before anything reaches the box."""
+    if os.environ.get("BEING_TUNNEL_NO_PROBE") == "1":
+        return "probe skipped"
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+    try:
+        urllib.request.build_opener(NoRedirect).open(f"https://{fqdn}/", timeout=10)
+        return "OPEN (no Access check answered)"
+    except urllib.error.HTTPError as e:
+        loc = e.headers.get("Location", "")
+        if e.code in (302, 303) and "cloudflareaccess.com" in loc:
+            return "gated (Access login)"
+        return "gated (403)" if e.code == 403 else f"HTTP {e.code}"
+    except Exception as e:  # DNS not propagated yet, etc.
+        return f"unreachable ({type(e).__name__})"
+
+
+# ---------- commands ----------
+
+def routes_for(s, desktop=True):
+    r = [("ssh", f"{s['ssh_host']}.{s['domain']}", f"ssh://localhost:{s['ssh_port']}")]
+    if desktop:
+        r.append(("desktop", f"{s['desktop_host']}.{s['domain']}", f"rdp://localhost:{s['rdp_port']}"))
+    return r
+
+
+def cmd_create(cf, s, rec, a):
+    if rec.d.get("tunnel") and rec.d.get("status") != "deleted":
+        die(f"{rec.path} already records tunnel {rec.d['tunnel']['name']}; use status, rotate or delete")
+    name = f"{s['being']}-box"
+    routes = routes_for(s, not a.no_desktop)
+    policy = email_policy(s)
+    if cf.call("GET", f"{cf.a}/cfd_tunnel?name={name}&is_deleted=false"):
+        die(f"a tunnel named {name} already exists in the account; not touching it")
+    for _, fqdn, _ in routes:
+        if cf.dns_exists(fqdn):
+            die(f"DNS record {fqdn} already exists; not touching it")
+    preflight_box(s)
+    rec.d.update(status="creating", log=rec.d.get("log", []))
+    try:
+        t = cf.call("POST", f"{cf.a}/cfd_tunnel", {"name": name, "config_src": "cloudflare"})
+        rec.d["tunnel"] = {"id": t["id"], "name": name}
+        rec.save("tunnel created")
+        say(f"tunnel {name}: {t['id']}")
+        # Access first: a hostname must never be live without its identity check, not even for a minute.
+        for kind, fqdn, _ in routes:
+            rec.d["apps"][kind] = dict(create_app(cf, s, fqdn, policy), host=fqdn)
+            rec.save(f"access app {fqdn}")
+            say(f"Access app {fqdn}: {rec.d['apps'][kind]['id']} (allow: {len(s['allow'])} people)")
+        cf.put_ingress(t["id"], add=[{"hostname": f, "service": svc} for _, f, svc in routes])
+        rec.d["routes"] = [f for _, f, _ in routes]
+        rec.save("ingress set")
+        for kind, fqdn, _ in routes:
+            r = cf.call("POST", f"{cf.z}/dns_records", {"type": "CNAME", "name": fqdn, "content": f"{t['id']}.cfargotunnel.com",
+                                                         "proxied": True, "comment": f"being-tunnel {s['being']}"})
+            rec.d["dns"][kind] = {"id": r["id"], "host": fqdn}
+            rec.save(f"dns {fqdn}")
+        if not cf.dry:
+            push_connector(cf, s, rec, t["id"])
+        rec.d["status"] = "active"
+        rec.save("created")
+    except Exception as e:
+        say(f"FAILED: {e}")
+        if a.keep_partial or cf.dry:
+            rec.save("create failed; partial kept")
+            die(f"partial setup kept; ids in {rec.path}; roll back with: being-tunnel delete {s['being']}")
+        say("rolling back what was created")
+        cmd_delete(cf, s, rec, argparse.Namespace(yes=True, box=s["box"]))
+        die("create failed and was rolled back")
+    for _, fqdn, _ in routes:
+        say(f"{fqdn}: {probe(fqdn) if not cf.dry else 'dry-run'}")
+    say(f"record: {rec.path} (ids only; commit it with the Being's home)")
+
+
+def cmd_delete(cf, s, rec, a):
+    t = rec.d.get("tunnel")
+    if not t:
+        die(f"nothing recorded in {rec.path}")
+    if not a.yes:
+        if not sys.stdin.isatty():
+            die("pass --yes to delete without a prompt")
+        if input(f"  type '{s['being']}' to delete tunnel {t['name']} and its routes: ").strip() != s["being"]:
+            die("cancelled", 2)
+    errors = []
+
+    def step(label, fn):
+        try:
+            fn()
+            say(f"removed {label}")
+        except Exception as e:
+            errors.append(f"{label}: {e}")
+            say(f"FAILED {label}: {e}")
+
+    for kind, d in list(rec.d.get("dns", {}).items()):   # DNS first: the hostname stops resolving
+        step(f"dns {d['host']}", lambda d=d: cf.call("DELETE", f"{cf.z}/dns_records/{d['id']}", ok404=True))
+        rec.d["dns"].pop(kind, None); rec.save()
+    if rec.d.get("routes"):
+        step("ingress rules", lambda: cf.put_ingress(t["id"], remove=set(rec.d["routes"])))
+        rec.d["routes"] = []; rec.save()
+    conn = rec.d.get("connector")
+    box = getattr(a, "box", None) or (conn or {}).get("box")
+    if conn and box and not cf.dry:
+        step(f"connector on {box}", lambda: ssh(box, REMOTE_STOP, [conn["unit"], conn["token_dir"]]))
+    step("tunnel connections", lambda: cf.call("DELETE", f"{cf.a}/cfd_tunnel/{t['id']}/connections", ok404=True))
+    step(f"tunnel {t['name']}", lambda: cf.call("DELETE", f"{cf.a}/cfd_tunnel/{t['id']}", ok404=True))
+    for name, tok in list(rec.d.get("service_tokens", {}).items()):
+        step(f"service token {name}", lambda tok=tok: cf.call("DELETE", f"{cf.a}/access/service_tokens/{tok['id']}", ok404=True))
+        rec.d["service_tokens"].pop(name, None); rec.save()
+    for kind, app in list(rec.d.get("apps", {}).items()):   # Access last: it guards until the route is gone
+        step(f"Access app {app['host']}", lambda app=app: cf.call("DELETE", f"{cf.a}/access/apps/{app['id']}", ok404=True))
+        rec.d["apps"].pop(kind, None); rec.save()
+    rec.d["status"] = "deleted" if not errors else "delete-incomplete"
+    rec.save("deleted" if not errors else f"delete incomplete: {len(errors)} step(s) failed")
+    if errors:
+        die(f"{len(errors)} step(s) failed; re-run delete after fixing them")
+
+
+def cmd_status(cf, s, rec, a):
+    t = rec.d.get("tunnel") or die(f"nothing recorded in {rec.path}")
+    info = cf.call("GET", f"{cf.a}/cfd_tunnel/{t['id']}", ok404=True)
+    if not info:
+        say(f"tunnel {t['name']}: NOT FOUND in the account")
+    else:
+        say(f"tunnel {t['name']}: {info.get('status', '?')}, {len(info.get('connections') or [])} connection(s)")
+    ingress = [r.get("hostname") for r in cf.config(t["id"]).get("ingress", []) if r.get("hostname")]
+    for kind, app in rec.d.get("apps", {}).items():
+        live = cf.call("GET", f"{cf.a}/access/apps/{app['id']}", ok404=True)
+        dns = rec.d.get("dns", {}).get(kind)
+        say(f"{app['host']}: Access {'ok' if live else 'MISSING'}, ingress {'ok' if app['host'] in ingress else 'missing'}, "
+            f"dns {'ok' if dns else 'none'}, {probe(app['host'])}")
+    for name, tok in rec.d.get("service_tokens", {}).items():
+        say(f"service token {name}: expires {tok.get('expires_at', '?')}")
+    conn = rec.d.get("connector")
+    if conn and (a.box or conn.get("box")):
+        st = ssh(a.box or conn["box"], 'systemctl --user is-active "$1"; d="${2/#\\~/$HOME}"; test -s "$d/token" && echo token=present || echo token=MISSING',
+                 [conn["unit"], conn["token_dir"]], check=False).split()
+        say(f"connector on {a.box or conn['box']}: {' '.join(st)}")
+
+
+def cmd_rotate(cf, s, rec, a):
+    t = rec.d.get("tunnel") or die(f"nothing recorded in {rec.path}")
+    cf.call("PATCH", f"{cf.a}/cfd_tunnel/{t['id']}", {"tunnel_secret": base64.b64encode(secrets.token_bytes(32)).decode()})
+    say("connector secret rotated; the old token no longer connects")
+    if not cf.dry:
+        push_connector(cf, s, rec, t["id"])
+    rec.save("connector token rotated")
+
+
+def cmd_service_token(cf, s, rec, a):
+    app = rec.d.get("apps", {}).get("ssh") or die("no SSH Access app recorded; run create first")
+    name = f"{s['being']}-ssh-svc"
+    if a.revoke:
+        tok = rec.d.get("service_tokens", {}).get(name) or die(f"no service token {name} recorded")
+        cf.call("DELETE", f"{cf.a}/access/apps/{app['id']}/policies/{tok['policy']}", ok404=True)
+        cf.call("DELETE", f"{cf.a}/access/service_tokens/{tok['id']}", ok404=True)
+        rec.d["service_tokens"].pop(name); rec.save(f"service token {name} revoked")
+        return say(f"service token {name} and its policy deleted")
+    if name in rec.d.get("service_tokens", {}):
+        die(f"{name} exists; --revoke it first (a leaked or lost token is rotated, never reused)")
+    if not a.to and not (a.out and a.recipient):
+        die("pass --to <ssh alias of the receiving box>, or --out <file.age> with --recipient <ssh public key file>")
+    if subprocess.run(["sh", "-c", "command -v age"], capture_output=True).returncode != 0:
+        die("age is not installed on this box")
+    recipient = open(os.path.expanduser(a.recipient)).read() if a.recipient else ssh(a.to, 'cat "${1/#\\~/$HOME}.pub"', [a.identity])
+    if not re.match(r"ssh-(ed25519|rsa) ", recipient.strip()):
+        die("recipient is not an ssh-ed25519 or ssh-rsa public key")
+    if cf.dry:
+        return say("[dry-run] would create the service token, a separate non_identity policy and hand it over")
+    tok = cf.call("POST", f"{cf.a}/access/service_tokens", {"name": name, "duration": "8760h"})
+    plain = f"TUNNEL_SERVICE_TOKEN_ID={tok['client_id']}\nTUNNEL_SERVICE_TOKEN_SECRET={tok['client_secret']}\n".encode()
+    tok.pop("client_secret", None)
+    rec.d.setdefault("service_tokens", {})[name] = {"id": tok["id"], "expires_at": tok.get("expires_at", "")}
+    rec.save(f"service token {name} created")
+    # Separate policy: the people's allow policy is never edited, and revoking this one cannot lock them out.
+    p = cf.call("POST", f"{cf.a}/access/apps/{app['id']}/policies", {
+        "name": f"{name} (machine)", "decision": "non_identity", "precedence": 10,
+        "include": [{"service_token": {"token_id": tok["id"]}}]})
+    rec.d["service_tokens"][name]["policy"] = p["id"]
+    rec.save(f"service token policy {p['id']}")
+    with tempfile.NamedTemporaryFile("w", suffix=".pub") as f:   # a public key: not secret
+        f.write(recipient.strip() + "\n"); f.flush()
+        enc = subprocess.run(["age", "-R", f.name], input=plain, capture_output=True, check=True).stdout
+    digest = hashlib.sha256(plain).hexdigest()
+    del plain
+    if a.out:
+        with open(a.out, "wb") as o:
+            o.write(enc)
+        say(f"encrypted handover written to {a.out}; the receiver decrypts it with: age -d -i <their ssh key> {os.path.basename(a.out)}")
+    else:
+        got = ssh(a.to, r"""set -euo pipefail; umask 077; d="${1/#\~/$HOME}"; k="${2/#\~/$HOME}"; mkdir -p "$d"; chmod 700 "$d"
+cat >"$d/svc.env.age"; age -d -i "$k" -o "$d/svc.env" "$d/svc.env.age"; rm -f "$d/svc.env.age"; chmod 600 "$d/svc.env"
+sha256sum "$d/svc.env" | cut -c1-64""", [s["token_dir"], a.identity], stdin=enc).strip()
+        if got != digest:
+            die("read-back on the receiver does not match: revoke (--revoke) and try again")
+        say(f"service token handed over to {a.to}:{s['token_dir']}/svc.env (0600), read back and matched")
+    say(f"ssh config on the receiver: Host {s['being']}-box-svc / HostName {app['host']} / ProxyCommand sh -c "
+        f"'set -a; . {s['token_dir']}/svc.env; exec cloudflared access ssh --hostname %h'")
+
+
+def cmd_hook(cf, s, rec, a):
+    t = rec.d.get("tunnel") or die(f"nothing recorded in {rec.path}; run create first")
+    fqdn = f"{s['hook_host']}.{s['domain']}"
+    app = rec.d.get("apps", {}).get("hook")
+    if a.remove:
+        if rec.d.get("dns", {}).get("hook"):
+            cf.call("DELETE", f"{cf.z}/dns_records/{rec.d['dns']['hook']['id']}", ok404=True); rec.d["dns"].pop("hook"); rec.save()
+        cf.put_ingress(t["id"], remove={fqdn})
+        rec.d["routes"] = [r for r in rec.d.get("routes", []) if r != fqdn]
+        if app:
+            cf.call("DELETE", f"{cf.a}/access/apps/{app['id']}", ok404=True); rec.d["apps"].pop("hook")
+        rec.save(f"hook {fqdn} removed")
+        return say(f"hook route {fqdn} removed")
+    ranges = []
+    for line in open(a.ranges or die("--ranges <file> is required (one CIDR per line)")):
+        line = line.split("#", 1)[0].strip()
+        if line:
+            try:
+                ranges.append(str(ipaddress.ip_network(line, strict=False)))
+            except ValueError:
+                die(f"not a CIDR: {line}")
+    if not ranges or any(ipaddress.ip_network(r).prefixlen == 0 for r in ranges):
+        die("the ranges file must list the published notification ranges, never 0.0.0.0/0")
+    policy = {"name": f"{s['being']} hook: notification ranges only", "decision": "bypass", "precedence": 1,
+              "include": [{"ip": {"ip": r}} for r in ranges]}
+    if app:
+        cf.call("PUT", f"{cf.a}/access/apps/{app['id']}/policies/{app['policies'][0]}", policy)
+        rec.save(f"hook ranges updated ({len(ranges)})")
+        return say(f"hook {fqdn}: bypass ranges updated ({len(ranges)})")
+    if cf.dns_exists(fqdn):
+        die(f"DNS record {fqdn} already exists; not touching it")
+    rec.d["apps"]["hook"] = dict(create_app(cf, s, fqdn, policy), host=fqdn)
+    rec.save(f"access app {fqdn}")
+    cf.put_ingress(t["id"], add=[{"hostname": fqdn, "service": f"http://127.0.0.1:{a.port}"}])
+    rec.d["routes"] = rec.d.get("routes", []) + [fqdn]
+    rec.save("hook ingress set")
+    r = cf.call("POST", f"{cf.z}/dns_records", {"type": "CNAME", "name": fqdn, "content": f"{t['id']}.cfargotunnel.com",
+                                                 "proxied": True, "comment": f"being-tunnel {s['being']} hook"})
+    rec.d["dns"]["hook"] = {"id": r["id"], "host": fqdn}
+    rec.save(f"dns {fqdn}")
+    say(f"hook {fqdn} -> 127.0.0.1:{a.port}, Access bypass for {len(ranges)} range(s) only")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="being-tunnel", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("command", choices=["create", "status", "delete", "rotate", "service-token", "hook"])
+    p.add_argument("being")
+    p.add_argument("--config", default="being.toml")
+    p.add_argument("--record")
+    p.add_argument("--org-env")
+    p.add_argument("--box")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--yes", action="store_true")
+    p.add_argument("--no-desktop", action="store_true")
+    p.add_argument("--keep-partial", action="store_true")
+    p.add_argument("--to")
+    p.add_argument("--out")
+    p.add_argument("--recipient")
+    p.add_argument("--identity", default="~/.ssh/id_ed25519")
+    p.add_argument("--revoke", action="store_true")
+    p.add_argument("--ranges")
+    p.add_argument("--port", type=int, default=8790)
+    p.add_argument("--remove", action="store_true")
+    a = p.parse_args()
+    if not re.fullmatch(r"[a-z][a-z0-9-]*", a.being):
+        die("Being name must be lowercase letters, digits or dashes", 2)
+    s = load_settings(a)
+    cf = CF(load_api_env(s["org_env"]), dry=a.dry_run)
+    rec = Record(a.record or f"tunnel-{a.being}.json", a.being, dry=a.dry_run)
+    {"create": cmd_create, "status": cmd_status, "delete": cmd_delete, "rotate": cmd_rotate,
+     "service-token": cmd_service_token, "hook": cmd_hook}[a.command](cf, s, rec, a)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except RuntimeError as e:
+        die(str(e))

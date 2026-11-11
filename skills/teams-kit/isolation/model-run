@@ -1,0 +1,25 @@
+#!/bin/bash
+# model-run <credential file|none> [K=V ...] -- <bwrap args...> -- <command...>, as the model user (isolation/README.md).
+# Clears the env, exports K=V and the credential file's allowed lines, then execs bwrap; no secret on an argv.
+set -euo pipefail
+cred=${1:?usage: model-run <cred|none> [K=V ...] -- <bwrap args> -- <command>}; shift
+keep=()
+while (( $# )) && [[ $1 != -- ]]; do
+  [[ $1 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || { echo "model-run: bad setting ${1%%=*}" >&2; exit 2; }
+  keep+=("$1"); shift
+done
+[[ ${1:-} == -- ]] || { echo "model-run: missing --" >&2; exit 2; }; shift
+secrets=()
+if [[ $cred != none ]]; then
+  [[ -r $cred ]] || { echo "model-run: cannot read the model credential $cred as $(id -un)" >&2; exit 5; }
+  while IFS= read -r l || [[ -n $l ]]; do
+    [[ $l =~ ^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_BASE_URL|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY)=(.*)$ ]] || continue
+    v=${BASH_REMATCH[2]}; v=${v#\"}; v=${v%\"}; v=${v#\'}; v=${v%\'}
+    secrets+=("${BASH_REMATCH[1]}=$v")
+  done <"$cred"
+fi
+for v in $(compgen -e); do unset "$v" 2>/dev/null || true; done
+(( ${#keep[@]} )) && export "${keep[@]}"
+(( ${#secrets[@]} )) && export "${secrets[@]}"
+umask 0002                     # workspace files stay group-writable for the kit user (setgid group, isolation/README)
+exec bwrap "$@"

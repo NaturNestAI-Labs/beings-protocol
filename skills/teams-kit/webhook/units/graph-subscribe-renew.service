@@ -1,0 +1,12 @@
+# Template: webhook/kit-install.sh writes this to ~/.config/systemd/user/ (@KIT@ = the Teams kit dir). Off until enabled.
+[Unit]
+Description=Force-renew (or recreate) the Graph subscription
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment="HOOK_STATE=@HOOK_STATE@"
+EnvironmentFile=%h/.config/graph-webhook/env
+WorkingDirectory=@KIT@
+ExecStart=/usr/bin/env node @KIT@/webhook/graph-subscribe.mjs renew
+UMask=0077

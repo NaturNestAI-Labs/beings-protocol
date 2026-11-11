@@ -1,0 +1,6 @@
+Shared inbox check for @DATE@. New mail (read-only scan) is in @NEW@ (JSON: id, folder, received, from, subject, text).
+
+1. Read the file. Classify each mail: reply needing a person, out-of-office, bounce, unsubscribe, spam, other.
+2. Do not reply, forward, mark read, move or delete anything. You have no tool for that and must not look for one.
+3. Write a short summary to <home>/projects/shared-inbox/@DATE@.md: one line per mail (sender, subject, class, next step).
+4. Post a short note (a few lines, no mail bodies) to the chat this job reports to: how many new, which need a person.

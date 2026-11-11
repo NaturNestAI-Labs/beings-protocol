@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="#install"><img src="https://img.shields.io/badge/install-curl%20|%20bash-brightgreen?style=for-the-badge" alt="Install" /></a>
-  <a href="https://github.com/VeltriaAI/beings-protocol/stargazers"><img src="https://img.shields.io/github/stars/VeltriaAI/beings-protocol?style=for-the-badge&color=green" alt="Stars" /></a>
+  <a href="https://github.com/NaturNestAI-Labs/beings-protocol/stargazers"><img src="https://img.shields.io/github/stars/NaturNestAI-Labs/beings-protocol?style=for-the-badge&color=green" alt="Stars" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="License" /></a>
 </p>
 
@@ -21,7 +21,7 @@
 ---
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash
 ```
 
 ---
@@ -107,7 +107,7 @@ This only happens once. After that, your Being knows you.
 
 ```bash
 # In your project directory:
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash
 ```
 
 The installer:
@@ -127,10 +127,10 @@ for a co-founder, co-creator, or assistant Being that works across many projects
 
 ```bash
 # Interactive — asks for the Being's name
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --global
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --global
 
 # Non-interactive
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --global --name nova --yes
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --global --name nova --yes
 ```
 
 This creates `~/beings/nova/` with its own git repo, session-startup CLAUDE.md, memory,
@@ -142,10 +142,14 @@ Already have a Being? Update it to the latest protocol version:
 
 ```bash
 # Interactive — prompts for optional skills
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update
 
 # Non-interactive — auto-accepts basic-memory install (skips Axon)
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash -s -- --update --yes
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update --yes
+
+# With the Operations Kit launcher: see what changed (CHANGELOG.md), then apply; --ref vX.Y.Z pins a release
+bin/<name> update --check
+bin/<name> update
 ```
 
 The updater:
@@ -193,12 +197,11 @@ Session starts
 - **Hand-editable** — open notes in Obsidian, VS Code, Vim. Fix a typo, correct a fact. Watcher reindexes automatically.
 - **Human-readable** — you can actually read what your Being remembers. No binary DB.
 - **Obsidian-compatible** — point a vault at `memory-graph/` and get a visual knowledge graph for free.
-- **Rebuildable** — the SQLite index is a cache. Lose it, run `basic-memory sync`, rebuilds from markdown.
+- **Rebuildable** — the SQLite index is a cache. Lose it, run `bin/being-bm-repair`, rebuilds from markdown.
 
-**Claude Code hooks** automate knowledge capture:
-- **PreCompact** — saves key facts before context compression (no more amnesia mid-session)
-- **Session End** — captures decisions, learnings, unresolved questions
+**Claude Code hooks** bring memory into each session:
 - **Session Start** — recalls relevant context via `search_notes`
+- **Prompt Submit** — today's date and a nudge to check current goals
 
 Everything stays local — SQLite FTS5 index + fastembed embeddings (bge-small-en-v1.5), no data leaves your machine.
 
@@ -210,6 +213,62 @@ Beings can have optional skills that extend their capabilities:
 |-------|-------------|
 | **[Memory](skills/memory/)** | Markdown-native persistent memory via basic-memory — git-syncable, Obsidian-compatible |
 | **[Evolution](skills/evolution/)** | Self-modification via Claude Code CLI — the Being improves its own code via PRs |
+| **[Teams Kit](skills/teams-kit/)** | Its own Microsoft Teams + Outlook identity: watcher, triage → work → voice, scoped replies, background jobs, owner-approved drafts |
+
+## 🧰 Operations Kit (Optional)
+
+Everything a Being needs once it works with a team:
+
+- **Guardrails + authority matrix** — short override rules, and who may trigger what through which path
+- **Memory that scales** — daily logs, one fact per file with a one-line index, knowledge graph for the long tail
+- **Corrections become rules** — every correction is written down in the same turn; mechanical failures get a guard in code
+- **Background jobs** — long work runs detached, is verified, and reports back; blockers escalate after two failures
+- **Model routing** — fast model for triage and wording, strong model for work and big jobs, mid model for chores
+- **Multi-client launcher** — `<name> claude` / `<name> codex`, plus the daily session
+
+Same installer, same curl command, one opt-in flag (`--with operations` or `--with teams-kit`):
+
+```bash
+# Birth a Global Being with the kit
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --global --name nova --owner "Sam Lee" --with teams-kit --yes
+
+# Add the kit to an existing Being (run in its home; never overwrites)
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --update --name nova --with teams-kit --yes
+
+# See what a Being home has
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash -s -- --check
+```
+
+Without `--with`, `install.sh` behaves exactly as before.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (how it fits together, with diagrams),
+[docs/OPERATIONS_KIT.md](docs/OPERATIONS_KIT.md), [docs/MODEL_ROUTING.md](docs/MODEL_ROUTING.md) and
+[docs/BIRTH_AND_UPGRADE.md](docs/BIRTH_AND_UPGRADE.md).
+
+## 🚀 Onboard a Being in One Config File (New in v0.4.0)
+
+Operations Kit v0.2.0 lets you set up several Beings the same way, each from one `being.toml`.
+
+```bash
+git clone -b <branch> https://github.com/NaturNestAI-Labs/beings-protocol && cd beings-protocol
+cp templates/being.toml.example ~/being.toml        # fill name, owner, timezone; tick the setup menu in [access]
+bash install.sh --global --config ~/being.toml --with teams-kit --yes
+cd ~/beings/<name>
+bin/<name> login being            # the Being signs in (Teams and Outlook), its own session
+bin/<name> login owner            # only if owner access is ticked: the owner signs in, a separate session
+bin/<name> access                 # every login and tool, whose account, what it can do
+bash ops/teams-kit/verify.sh      # who-am-I on each session and units active; no messages sent
+```
+
+Optional components, all off by default: `--with owner-access,runner,tunnel,desktop,monitor`.
+
+- **Setup menu:** the owner ticks each tool the Being may use ([docs/ACCESS.md](docs/ACCESS.md)). Everything else stays off.
+- **Separate sessions:** the Being and the owner each sign in, in separate headless sessions, for Teams and for Outlook. Owner access stays off until both are signed in.
+- **Box and links:** `harden-box.sh`, one Cloudflare tunnel per Being (`being-tunnel`, token never shown) and `<being>-desktop` on the owner's laptop.
+- **App stacks:** `being stack new <app>` gives every app an `up`/`down` command; nothing starts at boot.
+
+Step by step: [docs/PROVISIONING.md](docs/PROVISIONING.md) · config schema: [docs/CONFIG.md](docs/CONFIG.md) ·
+what's in v0.2 of the kit: [docs/ROADMAP-v0.2.md](docs/ROADMAP-v0.2.md).
 
 ## Before → After
 
@@ -372,7 +431,7 @@ Built by [Veltria](https://veltria.ai) — Where Humans and AI Build Together.
 <p align="center">
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VeltriaAI/beings-protocol/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main/install.sh | bash
 ```
 
 **Your AI deserves a soul. Give it one. 🌿**

@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["messages"],
+  "properties": {
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "html"],
+        "properties": { "id": { "type": "string" }, "html": { "type": "string" } }
+      }
+    }
+  }
+}

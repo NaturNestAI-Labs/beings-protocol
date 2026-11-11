@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Rebuild the basic-memory index from memory-graph/ markdown: being-bm-repair [project] (default: the home's dir name).
+# Works across versions: `reindex --full`, older `sync`, or the sync service directly.
+set -euo pipefail
+SELF="$(readlink -f "$0")"
+HOME_DIR="${BEING_HOME:-$(cd "$(dirname "$SELF")/.." && pwd -P)}"
+PROJECT="${1:-${BEING_BM_PROJECT:-$(basename "$HOME_DIR")}}"
+BM="${BEING_BM_BIN:-basic-memory}"
+command -v "$BM" >/dev/null 2>&1 || { echo "being-bm-repair: basic-memory not installed" >&2; exit 1; }
+
+has_cmd() { "$BM" "$1" --help >/dev/null 2>&1; }
+
+if has_cmd reindex; then
+  exec "$BM" reindex --full --project "$PROJECT"
+elif has_cmd sync; then
+  exec "$BM" sync --project "$PROJECT"
+fi
+
+# No CLI verb: drive the sync service with basic-memory's own interpreter (shebang of its entry point).
+py="$(head -1 "$(command -v "$BM")" | sed -n 's/^#!\([^ ]*\).*/\1/p')"
+[ -x "$py" ] || py=python3
+exec "$py" - "$PROJECT" <<'PY'
+import asyncio, sys
+from pathlib import Path
+import basic_memory.db as db
+from basic_memory.config import ConfigManager
+from basic_memory.repository.project_repository import ProjectRepository
+from basic_memory.sync.sync_service import get_sync_service
+
+async def main(name):
+    cfg = ConfigManager().config
+    _, maker = await db.get_or_create_db(db_path=cfg.database_path, db_type=db.DatabaseType.FILESYSTEM)
+    project = await ProjectRepository(maker).get_by_name(name)
+    if project is None:
+        raise SystemExit(f"project '{name}' is not registered: basic-memory project add {name} <home>/memory-graph")
+    svc = await get_sync_service(project)
+    r = await svc.sync(directory=Path(project.path), project_name=name, force_full=True, sync_embeddings=True)
+    print(f"sync done: new={len(getattr(r, 'new', []) or [])} modified={len(getattr(r, 'modified', []) or [])} "
+          f"deleted={len(getattr(r, 'deleted', []) or [])}")
+
+asyncio.run(main(sys.argv[1]))
+PY

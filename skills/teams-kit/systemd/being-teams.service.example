@@ -1,0 +1,22 @@
+# Template. Install as ~/.config/systemd/user/<BEING_NAME>-teams.service (`being-teams autostart on` writes the same unit),
+# replacing @BEING_NAME@ and @KIT@ (absolute path of skills/teams-kit). %h is the user's home.
+[Unit]
+Description=@BEING_NAME@ Teams presence + message watcher
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=%h
+ExecStart=@KIT@/being-teams __run
+# Stops the loop's process group only; handler runs and jobs (own sessions) finish their work.
+ExecStop=@KIT@/being-teams __stop
+# One run killed for memory must not stop the watcher (systemd default: stop the whole unit).
+OOMPolicy=continue
+KillMode=process
+TimeoutStopSec=20
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

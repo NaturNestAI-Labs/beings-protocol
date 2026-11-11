@@ -1,0 +1,10 @@
+# Template: kit-install.sh (skills/runner) writes ~/.config/systemd/user/@BEING_NAME@-heartbeat.service.
+[Unit]
+Description=@BEING_NAME@ heartbeat tick
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=@WORKSPACE@
+ExecStart=@RUNNER@/being-heartbeat
+UMask=0077

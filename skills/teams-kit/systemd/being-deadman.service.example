@@ -1,0 +1,11 @@
+# Template. Install as ~/.config/systemd/user/<BEING_NAME>-deadman.service with <BEING_NAME>-deadman.timer,
+# replacing @BEING_NAME@ and @KIT@ (absolute path of skills/teams-kit). %h is the user's home.
+[Unit]
+Description=@BEING_NAME@ dead-man check (independent of the Teams loop): loop, watermark, webhook, failed items -> alert
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=%h
+ExecStart=/usr/bin/python3 @KIT@/being-deadman
+TimeoutStartSec=120

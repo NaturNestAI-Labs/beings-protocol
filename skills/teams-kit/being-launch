@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+# being-launch <owner|job|team:<chatId>> [--cwd DIR] [--expose FILE]... [--collect FILE]... -- <command...>
+# Starts a model client behind the OS boundary BEING_ISOLATION picks (off|bwrap|users); see isolation/README.md.
+set -euo pipefail
+KIT="${BEING_KIT_HOME:-$(cd "$(dirname "$(readlink -f "$0")")" && pwd)}"
+if [[ -z "${BEING_STATE_DIR:-}" ]]; then set -a; . "$KIT/.env"; set +a; fi   # standalone use; being-handle/being-job export it
+MODE="${BEING_ISOLATION:-off}"
+
+# being-launch transcript <lane> <sessionId>: a kit-readable path to that run's Claude transcript (exit 1 if none).
+# It lives in the model's HOME: the kit user's, the lane's home/, or the model user's (read through sudo).
+if [[ "${1:-}" == transcript ]]; then
+  tl=${2:?lane}; sid=${3:?session id}
+  WS=$(readlink -f "${BEING_WORKSPACE:-$KIT/../..}"); proj=$(sed 's#[/.]#-#g' <<<"$WS")
+  if [[ $MODE == off || ( $MODE == bwrap && $tl != team:* ) || ( ${BEING_ISOLATION_LANES:-all} == team && $tl != team:* ) ]]; then f="$HOME/.claude/projects/$proj/$sid.jsonl"; [[ -f $f ]] && { echo "$f"; exit 0; }; exit 1; fi
+  if [[ $tl == team:* ]]; then
+    tg=$(printf '%s' "${tl#team:}" | sha1sum | cut -c1-10)
+    src="${BEING_TEAM_ROOT:-$BEING_STATE_DIR/team-lanes}/$tg/home/.claude/projects/$proj/$sid.jsonl"; u=${BEING_TEAM_USER:-}
+  else
+    u=${BEING_MODEL_USER:?}; src="$(getent passwd "$u" | cut -d: -f6)/.claude/projects/$proj/$sid.jsonl"
+  fi
+  dst="$BEING_STATE_DIR/transcripts/$sid.jsonl"; mkdir -p "${dst%/*}"
+  if [[ $MODE == users ]]; then sudo -n -u "$u" cat "$src" >"$dst.tmp" 2>/dev/null || { rm -f "$dst.tmp"; exit 1; }
+  else cat "$src" >"$dst.tmp" 2>/dev/null || { rm -f "$dst.tmp"; exit 1; }; fi
+  mv "$dst.tmp" "$dst"; echo "$dst"; exit 0
+fi
+
+lane=${1:?usage: being-launch <owner|job|team:<chatId>> [--cwd DIR] [--expose F]... [--collect F]... -- <command...>}; shift
+cwd=$PWD; expose=(); collect=()
+while (( $# )); do
+  case $1 in
+    --cwd) cwd=$2; shift 2 ;;
+    --expose) expose+=("$(readlink -f "$2")"); shift 2 ;;
+    --collect) collect+=("$(readlink -m "$2")"); shift 2 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+(( $# )) || { echo "being-launch: nothing to run" >&2; exit 2; }
+die() { echo "being-launch: $*" >&2; exit 5; }
+
+# BEING_ISOLATION_LANES: all (default) = every run goes behind the boundary; team = only teammate lanes and their jobs,
+# while the owner lane, owner jobs and routines run exactly as with `off` (teammates first).
+LANES="${BEING_ISOLATION_LANES:-all}"
+[[ $LANES == all || $LANES == team ]] || die "BEING_ISOLATION_LANES=$LANES (all|team)"
+[[ $MODE != bwrap || "${BEING_SANDBOX_NET:-none}" == none || "${BEING_SANDBOX_NET}" == host ]] || die "BEING_SANDBOX_NET=$BEING_SANDBOX_NET (none|host)"
+if [[ $MODE == off || ( $LANES == team && $lane != team:* ) ]]; then cd "$cwd"; exec "$@"; fi
+[[ $MODE == bwrap || $MODE == users ]] || die "BEING_ISOLATION=$MODE (off|bwrap|users)"
+command -v bwrap >/dev/null || die "bwrap not installed"
+
+WORKSPACE="${BEING_WORKSPACE:-$(cd "$KIT/../.." && pwd)}"; WORKSPACE=$(readlink -f "$WORKSPACE")
+SHIMS="${BEING_SHIM_DIR:-$KIT/isolation/shims}"
+RUN="${BEING_RUN_DIR:-$BEING_STATE_DIR/run}"            # broker sockets; /srv/nova/run in the users layout
+TEAM_ROOT="${BEING_TEAM_ROOT:-$BEING_STATE_DIR/team-lanes}"   # /srv/nova-team in the users layout
+[[ -d $SHIMS ]] || die "no shim dir $SHIMS (isolation/migrate.sh --apply builds it)"
+mkdir -p "$RUN"
+
+if [[ $lane == team:* ]]; then cls=team; chat=${lane#team:}; else cls=ai; chat=""; fi
+if [[ $MODE == users ]]; then
+  user=$([[ $cls == team ]] && echo "${BEING_TEAM_USER:?BEING_TEAM_USER unset}" || echo "${BEING_MODEL_USER:?BEING_MODEL_USER unset}")
+  uid=$(id -u "$user" 2>/dev/null) || die "no OS user $user (run isolation/setup-users.sh as root)"
+  [[ $uid != "$(id -u)" ]] || die "$user is the kit user"
+  uhome=$(getent passwd "$user" | cut -d: -f6)
+else
+  user=$(id -un); uid=$(id -u); uhome=$HOME
+fi
+
+# The model's own credential. users: root-owned /etc/<being>/claude-<user>.env, readable by that user only, sourced inside
+# (model-run). bwrap: a kit-user file (BEING_SANDBOX_CLAUDE_ENV) for teammate lanes; owner/job runs keep the kit user's login.
+CRED_ENV="${BEING_CLAUDE_ENV_DIR:-/etc/${BEING_NAME,,}}/claude-$user.env"
+
+# --- the per-run broker -----------------------------------------------------------------------------------------------
+sock="$RUN/broker-$$-$RANDOM.sock"
+bargs=(serve --socket "$sock" --class "$cls" --peer-uid "$uid")
+[[ $cls == team ]] && bargs+=(--chat "$chat")
+[[ $MODE == users ]] && bargs+=(--acl-user "$user")
+[[ "${BEING_BROKER_RAW_JOBS:-0}" == 1 ]] && bargs+=(--allow-raw-jobs)
+[[ "${BEING_BROKER_DRY:-0}" == 1 ]] && bargs+=(--dry)   # tests and live checks: the broker logs what it would run, runs nothing
+coproc BROKER { exec python3 "$KIT/kit-broker" "${bargs[@]}" 2>>"$BEING_STATE_DIR/broker.log"; }
+bpid=$BROKER_PID
+read -r -t 10 ready <&"${BROKER[0]}" || true
+[[ ${ready:-} == ready ]] || { kill "$bpid" 2>/dev/null; die "broker did not start (state/broker.log)"; }
+spool=$(mktemp -d "$RUN/x-XXXXXX")
+ppid_=""; msock=""; relay=()
+cleanup() { kill "$bpid" 2>/dev/null || true; [[ -n $ppid_ ]] && kill "$ppid_" 2>/dev/null; rm -f "$sock" ${msock:+"$msock"}; rm -rf "$spool"; }
+trap cleanup EXIT
+unset BEING_SEND_TOKEN                                     # the broker holds it; the model never does
+
+# --- the sandbox ------------------------------------------------------------------------------------------------------
+
+# The model client, mounted read-only for every run: the /srv install (users) or the kit user's own (bwrap).
+claude_bin=""; claude_pkg=""
+if c=${BEING_CLAUDE_BIN:-$(command -v claude 2>/dev/null)}; then claude_bin=$(readlink -f "$c"); claude_pkg=$(dirname "$(dirname "$claude_bin")"); fi
+[[ -x $claude_bin ]] || die "no claude binary (BEING_CLAUDE_BIN)"
+b=(--die-with-parent --unshare-pid --unshare-ipc --unshare-uts --new-session
+   --ro-bind /usr /usr --ro-bind /etc /etc --symlink usr/bin /bin --symlink usr/sbin /sbin
+   --symlink usr/lib /lib --symlink usr/lib64 /lib64 --proc /proc --dev /dev --tmpfs /tmp --tmpfs /run
+   --ro-bind-try /run/systemd/resolve /run/systemd/resolve --dir /run/kit --dir /run/bin --dir /run/kit-bin --bind "$sock" /run/kit/broker.sock)
+env=(BEING_BROKER_SOCK=/run/kit/broker.sock BEING_ISOLATION="$MODE" BEING_LANE="$lane" PATH=/run/kit-bin:/run/bin:/usr/local/bin:/usr/bin:/bin
+     LANG="${LANG:-C.UTF-8}" TERM=dumb SHELL=/bin/bash)
+b+=(--ro-bind "$claude_pkg" /run/claude-code --symlink "/run/claude-code/${claude_bin#"$claude_pkg"/}" /run/bin/claude)
+# node runs the client, the shims and the relay; one installed outside /usr (nvm, ~/.local, /opt) is bound in by itself.
+node_bin=$(readlink -f "${BEING_NODE_BIN:-$(command -v node 2>/dev/null || true)}" 2>/dev/null || true)
+[[ -x $node_bin ]] || die "no node binary (BEING_NODE_BIN)"
+[[ $node_bin == /usr/* ]] || b+=(--ro-bind "$node_bin" /run/bin/node)
+for v in BEING_SESSION_NAME BEING_VOICE BEING_REPLY_TO BEING_NAME OWNER_NAME BEING_FENCE_PERSONAL_WORDS CLAUDE_CODE_DISABLE_AUTO_MEMORY CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC \
+         ENABLE_CLAUDEAI_MCP_SERVERS; do [[ -n "${!v:-}" ]] && env+=("$v=${!v}"); done
+
+if [[ $cls == team ]]; then
+  # Teammate lane: its lane dir only (team-sync wrote it: public soul, CLAUDE.md, this chat's conversation, share: team files).
+  tag=$(printf '%s' "$chat" | sha1sum | cut -c1-10)
+  L="$TEAM_ROOT/$tag"
+  [[ -f $L/CLAUDE.md ]] || die "lane dir $L not prepared (team-sync $chat)"
+  # The lane dir is mounted AT the workspace path and the shims AT the kit path, so prompts, {{KIT}} and the teammate
+  # allowlist (Bash(<kit>/being-job agent:*) ...) stay as they are; only what is behind those paths changes.
+  b+=(--tmpfs /home --ro-bind "$L" "$WORKSPACE" --bind "$L/work" "$WORKSPACE/work" --bind "$L/home" /home/team
+      --ro-bind "$SHIMS" /run/kit-bin --chdir "$WORKSPACE")
+  env+=(HOME=/home/team USER=team)
+  if [[ $MODE == bwrap ]]; then
+    cred_file="${BEING_SANDBOX_CLAUDE_ENV:-}"
+    if [[ -z $cred_file && "${BEING_SANDBOX_MODEL_PROXY:-1}" == 1 ]]; then
+      # A per-run model-proxy (kit user) holds the login; the run gets a key for it only, via a 0600 spool file, never argv.
+      pkey=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+      if [[ "${BEING_SANDBOX_NET:-none}" == none ]]; then
+        # No network namespace of the host's: the proxy listens on a unix socket, bound in; model-relay serves it on loopback.
+        msock="$RUN/model-$$-$RANDOM.sock"; pport=${BEING_SANDBOX_MODEL_PORT:-8462}
+        coproc PROXY { PROXY_KEY=$pkey PROXY_SOCKET=$msock exec node "$KIT/model-proxy.mjs" 2>>"$BEING_STATE_DIR/broker.log"; }
+        ppid_=$PROXY_PID
+        read -r -t 10 pready _ <&"${PROXY[0]}" || true
+        [[ ${pready:-} == ready && -S $msock && $pport =~ ^[0-9]+$ ]] || die "model-proxy did not start (state/broker.log)"
+        b+=(--unshare-net --bind "$msock" /run/kit/model.sock --ro-bind "$KIT/model-relay.mjs" /run/kit/model-relay.mjs)
+        relay=(node /run/kit/model-relay.mjs /run/kit/model.sock "$pport" --)
+      else
+        coproc PROXY { PROXY_KEY=$pkey exec node "$KIT/model-proxy.mjs" 2>>"$BEING_STATE_DIR/broker.log"; }
+        ppid_=$PROXY_PID
+        read -r -t 10 pready pport <&"${PROXY[0]}" || true
+        [[ ${pready:-} == ready && ${pport:-} =~ ^[0-9]+$ ]] || die "model-proxy did not start (state/broker.log)"
+      fi
+      cred_file="$spool/model.env"
+      ( umask 077; printf 'ANTHROPIC_BASE_URL=http://127.0.0.1:%s\nANTHROPIC_AUTH_TOKEN=%s\n' "$pport" "$pkey" >"$cred_file" )
+      unset pkey
+    fi
+    [[ -n $cred_file && -r $cred_file ]] || die "teammate lanes need a model credential (BEING_SANDBOX_CLAUDE_ENV or the model proxy)"
+  fi
+else
+  # Owner lane and jobs: the workspace read-write, the kit path replaced by the shims; nothing else of the kit user's home.
+  [[ -d $cwd ]] || cwd=$WORKSPACE
+  b+=(--tmpfs /home --bind "$WORKSPACE" "$WORKSPACE" --ro-bind "$SHIMS" /run/kit-bin)
+  # Kit-user tokens that live inside the workspace are masked (migrate.sh moves them out; this holds until then).
+  for f in "$WORKSPACE"/.beings/daemon/.token-cache-*.json; do [[ -e $f ]] && b+=(--ro-bind /dev/null "$f"); done
+  # .secrets (customer and service credentials) is the kit user's; only .secrets/model/ is the model's (isolation/README).
+  if [[ -d $WORKSPACE/.secrets && "${BEING_MODEL_SECRETS:-hide}" != show ]]; then
+    b+=(--tmpfs "$WORKSPACE/.secrets")
+    [[ -d $WORKSPACE/.secrets/model ]] && b+=(--ro-bind "$WORKSPACE/.secrets/model" "$WORKSPACE/.secrets/model")
+  fi
+  if [[ $MODE == bwrap ]]; then
+    # Same OS user: bring back only what the model client itself needs from $HOME.
+    for d in .claude .local .codex .basic-memory .cache .npm .gitconfig .claude.json; do
+      [[ -e $HOME/$d ]] && b+=(--bind "$HOME/$d" "$HOME/$d")
+    done
+    env+=(HOME="$HOME" USER="$user" PATH="/run/kit-bin:/run/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin")
+  else
+    b+=(--bind "$uhome" "$uhome")
+    env+=(HOME="$uhome" USER="$user" PATH="/run/kit-bin:/run/bin:$uhome/.local/bin:/usr/local/bin:/usr/bin:/bin")
+  fi
+  [[ $cwd == "$WORKSPACE"* ]] || cwd=$WORKSPACE
+  b+=(--chdir "$cwd")
+fi
+
+# The kit path: a tmpfs holding only the shims (so --expose/--collect can add files under it), read-only once built.
+b+=(--tmpfs "$KIT")
+for f in "$SHIMS"/*; do b+=(--ro-bind "$f" "$KIT/$(basename "$f")"); done
+
+# --expose / --collect: copies in the spool, mounted at the original paths (a teammate never gets the kit's directories).
+i=0
+for f in "${expose[@]}"; do
+  [[ -f $f ]] || die "--expose $f: no such file"
+  cp "$f" "$spool/e$i"; chmod 0644 "$spool/e$i"; b+=(--ro-bind "$spool/e$i" "$f"); i=$((i+1))
+done
+i=0
+for f in "${collect[@]}"; do
+  : >"$spool/c$i"; chmod 0666 "$spool/c$i"; b+=(--bind "$spool/c$i" "$f"); i=$((i+1))
+done
+[[ $MODE == users ]] && { chmod 0711 "$spool"; setfacl -m "u:$user:rw" "$spool"/c* 2>/dev/null || true; }
+b+=(--remount-ro "$KIT")
+
+# No secret on any argv (/proc/<pid>/cmdline is world-readable): the non-secret settings are K=V words, the model's own
+# credential is exported from its file just before exec, and the environment is cleared of everything else.
+if [[ $MODE == users ]]; then
+  # model-run (root-installed by setup-users.sh) runs as the model user: clears the env, exports the K=V words and the
+  # allowed lines of that user's credential file, then execs the sandbox.
+  exec_cmd=(sudo -n -u "$user" -- "${BEING_MODEL_RUN:-/usr/local/libexec/${BEING_NAME,,}/model-run}" "$CRED_ENV" "${env[@]}" -- "${b[@]}" -- "$@")
+else
+  exec_cmd=("$KIT/isolation/model-run" "${cred_file:-none}" "${env[@]}" -- "${b[@]}" -- "${relay[@]}" "$@")
+fi
+[[ "${BEING_LAUNCH_DRY:-0}" == 1 ]] && { printf '%q ' "${exec_cmd[@]}"; echo; exit 0; }
+set +e
+"${exec_cmd[@]}"; rc=$?
+i=0
+for f in "${collect[@]}"; do [[ -s $spool/c$i ]] && cp "$spool/c$i" "$f"; i=$((i+1)); done
+exit $rc

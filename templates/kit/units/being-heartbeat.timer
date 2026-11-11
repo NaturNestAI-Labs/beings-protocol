@@ -1,0 +1,11 @@
+# Template: kit-install.sh (skills/runner) writes ~/.config/systemd/user/@BEING_NAME@-heartbeat.timer. Off until enabled.
+[Unit]
+Description=@BEING_NAME@ heartbeat every 30 min
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

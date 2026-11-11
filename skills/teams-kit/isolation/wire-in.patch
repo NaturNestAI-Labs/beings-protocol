@@ -1,0 +1,111 @@
+diff --git a/skills/teams-kit/being-handle b/skills/teams-kit/being-handle
+index 4cb942f..eb05c8d 100755
+--- a/skills/teams-kit/being-handle
++++ b/skills/teams-kit/being-handle
+@@ -11,6 +11,10 @@ set -a
+ . "$KIT/.env"
+ set +a
+ STATE="${BEING_STATE_DIR:?}"; HLOG="$STATE/handler.log"
++# OS isolation (isolation/README.md): model runs start through being-launch; a live steer relay would start a model as the
++# kit user, so notes take the durable path instead.
++ISO="${BEING_ISOLATION:-off}"
++[[ $ISO != off ]] && export BEING_STEER_CMD=/bin/false
+ WORKSPACE="${BEING_WORKSPACE:-$(cd "$KIT/../.." && pwd)}"
+ KREL=$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$KIT" "$WORKSPACE")
+ CLAUDE_DIR="$HOME/.claude/projects/$(readlink -f "$WORKSPACE" | sed 's#[/.]#-#g')"
+@@ -173,11 +177,15 @@ team_perms() {   # permission flags for teammate-lane runs: the fence, plus no s
+   printf '%s\0' "${flags[@]}"
+ }
+ 
++transcript_of() {   # $1 lane, $2 session id: a kit-readable path to that session's transcript (isolated runs keep theirs in the model's HOME)
++  if [[ $ISO == off ]]; then printf '%s' "$CLAUDE_DIR/$2.jsonl"; else "$KIT/being-launch" transcript "$1" "$2" 2>/dev/null || printf '/nonexistent'; fi
++}
++
+ work_daily() {   # $1 prompt, $2 send scope, $3 batch file, $4 lane, $5 session name; runs in the lane's work session for today
+   local lane=${4:-owner} name=${5:-} sid args tok rc cpid perm=bypassPermissions perms=() env=() sargs=() res=0
+   [[ -n $name ]] || name=$(session_name lane "$lane")
+   sid=$(uuid5 "being-daily/$BEING_NAME/$day$(lane_key "$lane")"); args=(--session-id "$sid")
+-  [[ -f "$CLAUDE_DIR/$sid.jsonl" ]] && { args=(--resume "$sid"); res=1; }
++  [[ -f "$(transcript_of "$lane" "$sid")" ]] && { args=(--resume "$sid"); res=1; }
+   mapfile -d '' -t sargs < <(soul_args "$lane" "$res")   # the soul, always: full in the owner lane, public in a teammate lane
+   if [[ $lane == owner ]]; then perms=(--dangerously-skip-permissions)
+   else mapfile -d '' -t perms < <(team_perms); env=(CLAUDE_CODE_DISABLE_AUTO_MEMORY=1)
+@@ -186,14 +194,23 @@ work_daily() {   # $1 prompt, $2 send scope, $3 batch file, $4 lane, $5 session
+   printf '%s %s %s\n' "$sid" "$lane" "$name" >"$STATE/work-session.$$"   # being-status / being-watchdog follow the running session
+   # Named (-n) so it shows in ListAgents and being-sessions; no SendMessage tool: other sessions are reached only through
+   # being-steer, which checks scope and logs every note. exec: $! is the claude process itself, for the registry.
+-  (cd "$WORKSPACE" && exec env "${env[@]}" BEING_LANE="$lane" BEING_SESSION_NAME="$name" BEING_VOICE=fast BEING_SEND_TOKEN="$tok" \
+-    BEING_REPLY_TO="$(reply_map "${3:-}")" claude -p -n "$name" "${perms[@]}" --disallowedTools SendMessage \
++  local launch=()
++  if [[ $ISO != off ]]; then   # behind the OS boundary: the grant goes to the run's broker, never into the model's env
++    launch=("$KIT/being-launch" "$lane" --cwd "$WORKSPACE")
++    for a in "${sargs[@]}"; do [[ -f $a ]] && launch+=(--expose "$a"); done
++    if [[ $lane == team:* ]] && ! python3 "$KIT/team-sync" "${lane#team:}" >>"$HLOG" 2>&1; then
++      log "team-sync failed for $(lane_tag "$lane"): run refused"; printf '%s' "$tok" | node "$KIT/scope.mjs" revoke; return 1
++    fi
++    launch+=(--)
++  fi
++  (cd "$WORKSPACE" && export BEING_SEND_TOKEN="$tok" && exec env "${env[@]}" BEING_LANE="$lane" BEING_SESSION_NAME="$name" BEING_VOICE=fast \
++    BEING_REPLY_TO="$(reply_map "${3:-}")" "${launch[@]}" claude -p -n "$name" "${perms[@]}" --disallowedTools SendMessage \
+     --model "${BEING_SESSION_MODEL:-opus}" "${sargs[@]}" "${args[@]}" "$1" </dev/null) >>"$HLOG" 2>&1 &
+   cpid=$!
+   python3 "$KIT/being-sessions" register --name "$name" --lane "$lane" --kind work --pid "$cpid" --sid "$sid" --perm "$perm" 2>>"$HLOG" || true
+   wait "$cpid"; rc=$?
+   # Ended; a note delivered live that this run never read takes the durable path (the lane's queue).
+-  python3 "$KIT/being-sessions" end --name "$name" --pid "$cpid" --transcript "$CLAUDE_DIR/$sid.jsonl" >>"$HLOG" 2>&1 || true
++  python3 "$KIT/being-sessions" end --name "$name" --pid "$cpid" --transcript "$(transcript_of "$lane" "$sid")" >>"$HLOG" 2>&1 || true
+   printf '%s' "$tok" | node "$KIT/scope.mjs" revoke
+   return $rc
+ }
+diff --git a/skills/teams-kit/being-job b/skills/teams-kit/being-job
+index b0e0852..2eef6e3 100755
+--- a/skills/teams-kit/being-job
++++ b/skills/teams-kit/being-job
+@@ -104,13 +104,22 @@ case "${1:-list}" in
+   any .env, other sessions, kit state or owner tools, and never use or hint at anything personal about the owner or anyone else."
+     fi
+     mapfile -t payload < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["payload"]))' "$jf")
++    # OS isolation (isolation/README.md): every kind of job (agent, codex, raw command) starts through being-launch, as the
++    # model user, with the grant held by the run's broker; the RESULT file is collected back into kit state.
++    launch=(); iso="${BEING_ISOLATION:-off}"
++    if [[ $iso != off ]]; then
++      launch=("$KIT/being-launch" "$BEING_LANE" --cwd "$WORKSPACE" --collect "$result")
++      [[ $BEING_LANE == team:* ]] && { python3 "$KIT/team-sync" "${BEING_LANE#team:}" >>"$log" 2>&1 || { echo "team-sync failed: job refused" >>"$log"
++        flock "$STATE/jobs.lock" python3 -c 'import json,sys,datetime; f=sys.argv[1]; d=json.load(open(f)); d.update(status="refused-team-sync",exit=3,finished=datetime.datetime.now().astimezone().isoformat()); json.dump(d,open(f,"w"),indent=2)' "$jf" || true; exit 3; }; }
++    fi
+     set +e
+     if [[ $kind == agent ]]; then
+       # The soul, always (soul.py): the full SOUL.md for an owner-lane job or heartbeat, the public soul for a teammate's job.
+       sargs=(); soulf=$(python3 "$KIT/soul.py" file "$BEING_LANE" 2>>"$log") && [[ -s $soulf ]] && sargs=(--append-system-prompt-file "$soulf") \
+         || echo "SOUL MISSING: this job runs without the soul" >>"$log"
+       # Named and registered; no SendMessage tool (other sessions are reached through being-steer). exec: $! is claude.
+-      (cd "$WORKSPACE" && exec claude -p -n "$sname" "${perms[@]}" --disallowedTools SendMessage --model "$(json_get "$jf" model)" "${sargs[@]}" \
++      [[ ${#launch[@]} -gt 0 && -n ${soulf:-} && -f $soulf ]] && launch+=(--expose "$soulf")
++      (cd "$WORKSPACE" && exec "${launch[@]}" ${launch:+--} claude -p -n "$sname" "${perms[@]}" --disallowedTools SendMessage --model "$(json_get "$jf" model)" "${sargs[@]}" \
+         --session-id "$(json_get "$jf" session_id)" "$RULES
+ $fence
+ RESULT file: $result
+@@ -124,20 +133,20 @@ ${payload[*]}" </dev/null) >"$log" 2>&1 &
+       extra=(); IFS=: read -ra dirs <<<"$(json_get "$jf" add_dirs)"
+       for d in "${dirs[@]}"; do [[ -n $d ]] && extra+=(--add-dir "$d"); done
+       net=false; [[ "$(json_get "$jf" network)" == True ]] && net=true
+-      (cd "$WORKSPACE" && codex exec --json --skip-git-repo-check -C "$WORKSPACE" -s workspace-write "${extra[@]}" \
++      (cd "$WORKSPACE" && "${launch[@]}" ${launch:+--} codex exec --json --skip-git-repo-check -C "$WORKSPACE" -s workspace-write "${extra[@]}" \
+         -c "sandbox_workspace_write.network_access=$net" -c model_reasoning_effort=medium -o "$result" \
+         "$RULES (Your final message is written to the RESULT file for you.)
+ $fence
+ Task:
+ ${payload[*]}" </dev/null) >"$JOBS/$id.events.jsonl" 2>"$log"
+     else
+-      (cd "$WORKSPACE" && "${payload[@]}") >"$log" 2>&1
++      (cd "$WORKSPACE" && "${launch[@]}" ${launch:+--} "${payload[@]}") >"$log" 2>&1
+     fi
+     rc=$?; set -e
+     printf '%s' "$BEING_SEND_TOKEN" | node "$KIT/scope.mjs" revoke; unset BEING_SEND_TOKEN
+     # Ended: live notes the job never read are recorded in its job file, for the result handler below.
+     [[ $kind == agent ]] && { python3 "$KIT/being-sessions" end --name "$sname" --pid "$cpid" \
+-      --transcript "$CLAUDE_DIR/$(json_get "$jf" session_id).jsonl" >>"$log" 2>&1 || true; }
++      --transcript "$( if [[ $iso == off ]]; then echo "$CLAUDE_DIR/$(json_get "$jf" session_id).jsonl"; else "$KIT/being-launch" transcript "$BEING_LANE" "$(json_get "$jf" session_id)" 2>/dev/null || echo /nonexistent; fi )" >>"$log" 2>&1 || true; }
+     # Verify: a model job that exits 0 without a result file is not "done".
+     status="done"; (( rc != 0 )) && status="failed"
+     [[ $kind != run && $status == "done" && ! -s "$result" ]] && status=no-result

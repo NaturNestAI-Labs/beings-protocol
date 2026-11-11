@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""being-sessions [--all] [--json] | name lane|warm <lane> [--msgs F] | name job <name> | register ... | end ... | lanes
+   The live list of the Being's Claude sessions (state/sessions.json); full usage in README "Script notes"."""
+import json, os, re, sys
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import mesh
+
+a = sys.argv[1:]
+def opt(k, d=""):
+    return a[a.index(k) + 1] if k in a and a.index(k) + 1 < len(a) else d
+
+if not mesh.STATE: sys.exit("BEING_STATE_DIR not set")
+cmd = a[0] if a and not a[0].startswith("--") else "list"
+if cmd == "name":
+    kind, arg = a[1], a[2]
+    msgs = [json.loads(l) for l in open(opt("--msgs")) if l.strip()] if opt("--msgs") else None   # first sight: the teammate's name
+    print(mesh.job_name(arg) if kind == "job" else mesh.lane_name(arg, msgs, kind="warm" if kind == "warm" else "work"))
+elif cmd == "register":
+    if opt("--sid") and not re.fullmatch(r"[A-Za-z0-9-]{1,100}", opt("--sid")): sys.exit("refused: --sid must be [A-Za-z0-9-]")
+    mesh.register(opt("--name"), opt("--lane", "owner"), opt("--kind", "work"), opt("--pid"), opt("--sid"), opt("--perm"), jobId=opt("--job"))
+elif cmd == "end":
+    mesh.end(opt("--name"), opt("--pid"))
+    moved = mesh.settle(opt("--name"), opt("--pid"), opt("--transcript"))
+    if moved: print("notes not read live, sent the durable way: " + " ".join(moved))
+elif cmd in ("lanes", "list") and mesh.caller_lane() == mesh.DENIED:
+    print("refused: this run's send grant is not valid", file=sys.stderr); sys.exit(3)
+elif cmd == "lanes":
+    for lane, e in mesh.read_json(mesh.p("lanes.json"), {}).items():
+        if mesh.caller_lane() in ("owner", lane): print(f"{mesh.lane_name(lane):<28} {lane}")
+elif cmd == "list":
+    me = mesh.caller_lane()
+    rows = mesh.sessions(include_other=me == "owner")
+    if me != "owner": rows = [r for r in rows if r.get("lane") == me]
+    if "--all" not in a: rows = [r for r in rows if r["state"] != "ended"]
+    if "--json" in a: print(json.dumps(rows, indent=1)); sys.exit(0)
+    print(mesh.summary_line(rows))
+    for l in mesh.table(rows): print(l)
+else:
+    print(__doc__, file=sys.stderr); sys.exit(2)

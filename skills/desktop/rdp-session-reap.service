@@ -1,0 +1,10 @@
+# Template: skills/desktop/kit-install.sh writes ~/.config/systemd/user/rdp-session-reap.service on the Being's box.
+[Unit]
+Description=End remote desktop sessions nobody has viewed for a while
+
+[Service]
+Type=oneshot
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=REAP_GRACE=@REAP_GRACE@
+Environment=RDP_PORT=@RDP_PORT@
+ExecStart=@DESKTOP@/rdp-session-end.sh reap

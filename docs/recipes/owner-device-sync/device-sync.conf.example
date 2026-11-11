@@ -1,0 +1,9 @@
+# ~/.config/being-device-sync/device-sync.conf (sourced by daily-sync.sh). No secrets belong here.
+DEVICE_SYNC_ROOTS="$HOME/code"              # colon-separated directories that hold git checkouts
+DEVICE_SYNC_DEPTH=3                          # how deep to look for .git under each root
+DEVICE_SYNC_REMOTE_MATCH='github\.com[:/]<org>/'   # only repos whose origin matches this regex
+# Steps to run in order (default: ff-pull.sh alone); each prints FAIL/CONFLICT/SKIPPED lines for problems.
+# DEVICE_SYNC_STEPS=("$HOME/.local/share/being-device-sync/ff-pull.sh" "$HOME/bin/restart-moved-stacks")
+# Command that receives the failure notice on stdin (only on failure), e.g. a blocker or a message to the owner.
+# DEVICE_SYNC_NOTIFY='notify-send "Device sync" "$(cat)"'
+# DEVICE_SYNC_NOTIFY="$HOME/bin/tell-being-device-sync"    # e.g. forwards stdin to the Being's blocker over SSH

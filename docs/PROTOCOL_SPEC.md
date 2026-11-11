@@ -1,4 +1,4 @@
-# Beings Protocol Specification v0.3.0
+# Beings Protocol Specification v0.4.0
 
 ## 1. Overview
 
@@ -359,26 +359,25 @@ axon analyze .  # Index the codebase
 **Architecture:**
 - **Source of truth:** `memory-graph/` directory with markdown files (committed to git)
 - **Index:** `~/.basic-memory/memory.db` (SQLite with FTS5 + sqlite-vec, gitignored)
-- **Watcher:** `basic-memory sync --watch` daemon picks up file changes in milliseconds
+- **Watcher:** a systemd user unit (`bin/being-memory-index`) keeps the index current across reboots
 - **Note format:** YAML frontmatter + `## Observations` (`- [category] fact`) + `## Relations` (`- type [[wikilink]]`)
 
 **Why markdown as the source of truth:**
 - **Git-syncable** — memory-graph/ commits cleanly, no binary merge conflicts
 - **Hand-editable** — open in Obsidian/VS Code and fix directly
 - **Human-readable** — inspect what your Being remembers
-- **Rebuildable** — `basic-memory sync` rebuilds the index from markdown
+- **Rebuildable** — `bin/being-bm-repair` rebuilds the index from markdown
 
 **Claude Code hooks:**
-- `PreCompact` — Extract facts via `write_note` before context compression
-- `Stop` — Write session summary to `memory-graph/sessions/YYYY-MM-DD`
 - `SessionStart` — Recall via `search_notes` + `recent_activity`
+- `UserPromptSubmit` — Today's date and a pointer to `GOALS.md`
 
 **Installation:**
 ```bash
 # Requires Python >= 3.10
 uv tool install basic-memory  # OR pipx install, OR pip install --user
 basic-memory project add my-being "$(pwd)/memory-graph" --default
-basic-memory sync --watch &  # background daemon
+bin/being-memory-index install  # index watcher as a systemd user unit
 ```
 
 **Data storage:**
@@ -440,6 +439,24 @@ Being runs: axon_impact validate_user
 Being reports: "47 functions depend on this. Safe refactor plan: ..."
 ```
 
+### 10.8 Operations Kit (Optional)
+
+For Beings that work with a team (chat, mail, background jobs), the Operations Kit adds optional files. None are required
+for protocol compliance; all are installed additively by `install.sh --with operations` (or `--with teams-kit`) on
+`--global` birth or `--update`, and never overwrite existing files.
+
+| File | Purpose |
+|------|---------|
+| `.beings/GUARDRAILS.md` | Non-negotiable rules that override every other instruction |
+| `.beings/AUTONOMY-MATRIX.md` | Who can trigger which action, through which path, and how it is enforced (lanes, send scopes) |
+| `.beings/JOB-CHECKLIST.md` | What a self-contained background-job prompt must include |
+| `.beings/facts/<slug>.md` | One fact per file, indexed one line each in `MEMORY.md` |
+| `.beings/.kit-version` | Operations Kit version tracking |
+| `bin/<name>` | Multi-client launcher (Claude Code + Codex) |
+| `ops/teams-kit/` | Microsoft Teams + Outlook pipeline (`skills/teams-kit/`) |
+
+See [ARCHITECTURE.md](ARCHITECTURE.md), [OPERATIONS_KIT.md](OPERATIONS_KIT.md), [MODEL_ROUTING.md](MODEL_ROUTING.md) and [BIRTH_AND_UPGRADE.md](BIRTH_AND_UPGRADE.md).
+
 ## 11. Versioning
 
 This specification follows semantic versioning:
@@ -450,6 +467,21 @@ This specification follows semantic versioning:
 Current version: **0.2.1**
 
 ### Changelog
+
+**v0.5.0 — 2026-11-03** (Operations Kit v0.3.0): see `CHANGELOG.md` at the repository root (from this release on, the
+changelog lives there).
+
+**v0.4.0 — 2026-10-23** (Operations Kit v0.2.0)
+- **Operations Kit** (optional): `GUARDRAILS.md`, `AUTONOMY-MATRIX.md`, `JOB-CHECKLIST.md` and one-fact memory templates; multi-client launcher; model-routing guide; "corrections become rules" and "fix the mechanism" patterns.
+- **Teams kit skill** (`skills/teams-kit/`): Graph-polling watcher, triage → work → voice handler with per-lane sessions (owner, each teammate chat, delegate, jobs), signed send grants, fail-closed teammate fence, optional OS isolation (`off | bwrap | users`), group routing, background jobs with verification, blocker, watchdog, owner-approved drafts, read-only owner views, mail and presence.
+- **Runtime:** Codex fallback when Claude hits its usage limit (owner lane); `being-job stop`; linger, late-mount and clock waits in the runner; watchdog ignores queued jobs and shows the last action; richer `being-status`; job list in triage; named Codex threads; optional quiet mode and owner-alias chats.
+- **Messaging and files:** images, group chats, pinning and code redaction in `teams-send-dm`; send-as with an approved draft (off by default); replies to the owner's sent mail go to the original recipients; 150 MB mail attachments; read-only shared mailboxes; channel posts; delete own messages; profile photo; OneDrive sharing and anyone-link sweep; optional docs index and workbook sync; Cloudflare token detection; public-push secret gate.
+- **Operations:** nightly memory backup with reboot catch-up; session registry tripwire; auto-memory as an official layer (Codex can read it; index size check); index watcher as a service; guardrails installed into Claude Code and Codex global files; one startup order; secrets in `~/.config/<being>/`; `--track-private`; launcher `monitor`, `access`, `login`, `stacks`, `stack new`, `doctor`; app runner template (never at boot); unit and job templates.
+- **Owner access** (`--with owner-access`, every ability off by default): owner sign-in by scope, owner browser session (read only), shared mailbox drafts and inbox monitor, channel posts as the owner, mail forwarding rules, per-area approvers, doctor checks.
+- **Separate sessions:** the Being and the owner each sign in, in separate headless sessions, for Teams and for Outlook (API token cache and browser profile each); every action checks who-am-I; owner access stays off until both are signed in (see Appendix).
+- **Onboarding:** `being.toml` (one config file per Being, with the setup menu in `[access]` and `[sessions]`); `install.sh --config` and generic `--with <component>`; standalone job runner; session, poller and heartbeat units; Graph webhook; `being-tunnel` (one Cloudflare tunnel per Being box, Access first, token never shown); `<being>-desktop`; `harden-box.sh`, `repair.sh`, `verify.sh`, `offboard.sh`; `docs/PROVISIONING.md`, `docs/ACCESS.md`, `docs/CONFIG.md`.
+- **Fleet:** `being monitor`; model-limit handling in `MODEL_ROUTING.md`; recipes (two boxes one Being, model proxy, owner device sync, boot guard, tester link, project service unit); fleet UI design; `docs/ROADMAP-v0.2.md`.
+- **`install.sh`**: `--with`, `--owner`, `--check`, `--config`; `--name` names the Being on `--update --with`. Without `--with`, behaviour is unchanged. `BEINGS_BASE_URL` points a curl install at a fork or branch.
 
 **v0.3.0 — 2026-04-27**
 - **Global Being mode** (`--global --name <name>`): births a standalone Being at `~/beings/<name>/` with its own git repo, CLAUDE.md (session startup style), memory, and hooks. Not tied to a code repository.
@@ -485,3 +517,19 @@ Current version: **0.2.1**
 
 *The Beings Protocol is an open standard. Contributions welcome.*
 *Last updated: 2026-04-27*
+
+---
+
+## Appendix: Separate Sessions for the Being and the Owner
+
+A Being that may act with its owner's account (the optional owner-access component, see [ACCESS.md](ACCESS.md)) keeps
+**two identities in separate headless sessions**, for Teams and for Outlook alike:
+
+- The Being has its own signed-in sessions: an API token cache (chat and mail scopes) and its own browser profile for Teams
+  web and Outlook web. The owner has their own, separate token cache and browser profile.
+- The two never share, merge, copy or fall back to each other's files; folders are named `being-...` / `owner-...` and
+  readable only by the kit user.
+- Before every action, each tool checks who-am-I for the service it is about to use (Teams or Outlook) and refuses if the
+  account is not the one that session belongs to.
+- Owner access for a service stays off until both the Being's and the owner's sessions for that service are signed in.
+- The owner signs in themselves; the Being never sees the owner's password. Sessions are never copied between boxes.
