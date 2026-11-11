@@ -118,7 +118,7 @@ ENV
 cp "$TMP/b.toml" "$W/being.toml"
 out="$(nova access)"
 for s in "Being Teams" "Being Outlook" "Owner Teams" "Owner Outlook"; do grep -q "$s" <<<"$out" || bad "access misses $s"; done
-grep -q 'being_mail' <<<"$out" && ok "access shows the [access] list and four sessions" || bad "access: $out"
+grep -q "being_mail .*its own mailbox" <<<"$out" && ok "access shows the [access] list and four sessions" || bad "access: $out"
 : >"$LOG"; nova login being >/dev/null 2>&1 || bad "login being failed: $(tail -2 "$LOG")"
 grep -q "teams-login-device.mjs --upn nova@example.test --cache $KIT/state/token-cache.json --scopes Chat.ReadWrite" "$LOG" \
   && grep -q "teams-login-device.mjs --upn nova@example.test --cache $KIT/state/being-outlook-cache.json --scopes Mail.ReadWrite" "$LOG" \

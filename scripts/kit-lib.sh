@@ -29,7 +29,7 @@ kit_args() {
 }
 
 KIT_LOCAL=0
-kit_sha() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
+kit_sha() { { sha256sum "$1" 2>/dev/null || shasum -a 256 "$1" 2>/dev/null; } | cut -d' ' -f1; }   # macOS: shasum
 # <dir>/.kit-manifest keeps each file's hash as installed, so a local (owner-approved) edit is never mistaken for an old kit copy.
 kit_manifest_set() {
   local man t; man="$(dirname "$1")/.kit-manifest"; t="$(mktemp)"
@@ -51,7 +51,8 @@ kit_place() {
     if [[ -f "$man" ]]; then
       was="$(awk -F'\t' -v f="$(basename "$dest")" '$2 == f { print $1 }' "$man")"
     fi
-    [[ -f "$(dirname "$stage")/CHANGES.txt" ]] && sed -i "/^$(basename "$dest" | sed 's/[.[\*^$/]/\\&/g')\t/d" "$(dirname "$stage")/CHANGES.txt"   # one line per file
+    local ch; ch="$(dirname "$stage")/CHANGES.txt"   # one line per file (awk: portable to BSD)
+    if [[ -f "$ch" ]]; then awk -F'\t' -v f="$(basename "$dest")" '$1 != f' "$ch" >"$ch.tmp" && mv "$ch.tmp" "$ch"; fi
     if [[ -n "$was" && "$was" == "$(kit_sha "$dest")" ]]; then
       printf '%s\tupstream only: safe to swap in\n' "$(basename "$dest")" >> "$(dirname "$stage")/CHANGES.txt"
     else

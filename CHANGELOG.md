@@ -26,6 +26,7 @@ Protocol and Operations Kit versions move together: every release bumps `PROTOCO
 - A new draft for the same chat, mail thread, or the same people within 30 minutes replaces the older pending ones: the prompt says so and the old ones can no longer be approved.
 - Components (`runner`, `owner-access`, `monitor`, `desktop`, `tunnel`, ...) install and update over curl and through `<being> update`: each ships a `kit-files.txt`, and its install hook runs from a fetched copy of the kit layout it needs. Before, a curl install stopped with "unknown --with component", so `<being> update` failed for every Being with a component.
 - `owner-access-doctor.mjs` fails a browser ability (`owner_files`, `owner_web_pages`) whose `[owner_web]` hosts are still the example's placeholders or whose `playwright-core` is missing, instead of reporting ok until first use.
+- macOS (bash 3.2, BSD tools): the `bin/<being>` launcher no longer needs bash 4 (it stopped at load on macOS), file hashes fall back to `shasum`, so updates no longer report every file as a local change there, and `CHANGES.txt` is rewritten without `sed -i`.
 
 ## [0.5.0] - 2026-11-03 (kit 0.3.0)
 

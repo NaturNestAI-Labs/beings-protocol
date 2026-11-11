@@ -106,5 +106,21 @@ sup=$(sed -n '/^KIT_HOOK_SUPPORT="/,/"$/p' "$REPO/install.sh"); nope=""
 for h in $hooks; do grep -qF "$h" <<<"$sup" || nope+=" $h"; done
 [[ -z $nope ]] && ok "everything a component hook reads from the kit is fetched for curl installs" || bad "not in KIT_HOOK_SUPPORT:$nope"
 
+# 6. macOS: install.sh, kit-lib.sh and the launcher run on bash 3.2 and BSD tools.
+b4=$(grep -nHE 'declare -A|mapfile|readarray|\$\{[A-Za-z_]+(,,|\^\^)\}|&>>|local -n|declare -n|-printf |sed -i' \
+  "$REPO/install.sh" "$REPO/scripts/kit-lib.sh" "$REPO/templates/kit/bin/being" | grep -v '^\S*:[0-9]*:\s*#' || true)
+[[ -z $b4 ]] && ok "no bash 4 or GNU-only constructs where macOS runs" || bad "macOS-unsafe: $b4"
+if command -v shasum >/dev/null; then
+  NB="$T/nosha"; mkdir -p "$NB"; for c in bash cut shasum perl awk mktemp mv cmp mkdir dirname basename cat rm touch; do
+    p=$(command -v "$c" || true); [[ -n $p ]] && ln -s "$p" "$NB/$c"; done
+  echo x >"$T/f1"; want=$(sha256sum "$T/f1" | cut -d' ' -f1)
+  got=$(PATH="$NB" bash -c '. "$1"; kit_sha "$2"' _ "$REPO/scripts/kit-lib.sh" "$T/f1" 2>/dev/null || true)
+  [[ $got == "$want" ]] && ok "kit_sha works without sha256sum (macOS)" || bad "kit_sha without sha256sum: '$got'"
+fi
+KD="$T/kp"; mkdir -p "$KD"; echo old >"$KD/a.txt"
+for v in new1 new2; do echo "$v" >"$T/tmpf"; bash -c '. "$1"; kit_place "$2" "$3"' _ "$REPO/scripts/kit-lib.sh" "$T/tmpf" "$KD/a.txt" >/dev/null; done
+[[ $(grep -c '^a.txt	' "$KD/.kit-upgrade/CHANGES.txt") == 1 && $(cat "$KD/.kit-upgrade/a.txt") == new2 ]] \
+  && ok "a staged file keeps one CHANGES.txt line" || bad "CHANGES.txt: $(cat "$KD/.kit-upgrade/CHANGES.txt")"
+
 echo "kit-audit: $([[ $fails == 0 ]] && echo 'all checks passed' || echo "$fails FAILED")"
 exit $(( fails > 0 ))

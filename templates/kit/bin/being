@@ -42,7 +42,7 @@ cmd_update() {
   lp="$(cat "$WORKSPACE/.beings/.protocol-version" 2>/dev/null || echo 0.0.0)"
   lk="$(cat "$WORKSPACE/.beings/.kit-version" 2>/dev/null || echo 0.0.0)"
   echo "installed: protocol $lp, kit $lk"
-  echo "$ref: protocol ${rp:-?}, kit ${rk:-?}   (install.sh sha256 $(sha256sum "$tmp/install.sh" | cut -c1-16))"
+  echo "$ref: protocol ${rp:-?}, kit ${rk:-?}   (install.sh sha256 $({ sha256sum "$tmp/install.sh" 2>/dev/null || shasum -a 256 "$tmp/install.sh"; } | cut -c1-16))"
   python3 - "$tmp/CHANGELOG.md" "$lp" <<'PY'
 import re, sys
 v = lambda s: tuple(int(x) for x in re.findall(r"\d+", s)[:3])
@@ -88,7 +88,8 @@ EOF
 }
 
 sessions() {   # newest first, sub-agent transcripts skipped
-  { find "$SESSION_DIR" -maxdepth 1 -name '*.jsonl' ! -name 'agent-*' -printf '%T@ %f\n' 2>/dev/null || true; } | sort -rn | cut -d' ' -f2 | sed 's/\.jsonl$//'
+  # ls -t, not find -printf: the same on GNU and BSD (macOS)
+  { cd "$SESSION_DIR" 2>/dev/null && ls -t -- *.jsonl 2>/dev/null || true; } | grep -v '^agent-' | sed 's/\.jsonl$//' || true
 }
 
 list_sessions() {
@@ -159,42 +160,46 @@ being_config() {
 }
 access_list() { local f; f="$(toml_file)"; [[ -n "$f" ]] && being_config "$f" list access; return 0; }
 
-declare -A ACCESS_INFO=(
-  [owner_chat]="Being | Teams 1:1 with the owner: read + send (required)"
-  [claude]="Being | Claude Code seat on this box"
-  [memory]="local | memory search: read + write notes"
-  [teammate_chats]="Being | Teams chats with teammates: reply in their own chat"
-  [group_chats]="Being | Teams group chats and channels: read + post"
-  [being_mail]="Being | its own mailbox: read + send"
-  [being_onedrive]="Being | its own OneDrive: upload + share by name"
-  [presence]="Being | Teams presence and photo"
-  [codex]="Being | Codex login on this box"
-  [owner_teams_read]="Owner | owner's Teams, read only"
-  [owner_teams_send]="Owner | owner's Teams, send after approval"
-  [owner_mail_read]="Owner | owner's mail, read only"
-  [owner_mail_send]="Owner | owner's mail, send after approval"
-  [owner_files]="Owner | owner's files (OneDrive, SharePoint), read only"
-  [owner_web]="Owner | owner's Outlook/Teams web pages, read only"
-  [shared_mailbox_read]="Owner | shared mailbox, read only"
-  [shared_mailbox_send]="Owner | shared mailbox drafts and reviewed batch send"
-  [owner_channel_posts]="Owner | posts in one named channel as the owner, after a go"
-  [mail_rules]="Owner | pre-approved mail forwarding rules"
-  [area_approvers]="- | named people who can say "go" for one area"
-  [github_being]="Being | own GitHub account or repo-limited token"
-  [github_owner]="Owner | owner's GitHub login (very high risk)"
-  [azure_devops]="either | Azure DevOps pipelines and work items"
-  [cloud_cli]="either | cloud CLIs (very high risk)"
-  [kubernetes]="key | named Kubernetes clusters (very high risk)"
-  [notion]="Being | Notion integration"
-  [tunnel]="admin key at setup | Cloudflare tunnel for the box"
-  [cloudflare_api]="Owner token | whole Cloudflare account (very high risk)"
-  [app_keys]="key | single-app keys from the key folder"
-  [model_hubs]="key | model hub downloads"
-  [model_proxy]="key | local model proxy"
-  [vpn]="key | VPN to private networks"
-  [device_sync]="owner's laptop | owner device sync"
-  [desktop]="owner's laptop | <being>-desktop"
-)
+# One line per access id (a function, not an associative array: macOS ships bash 3.2).
+access_info() {
+  case "$1" in
+    owner_chat) echo "Being | Teams 1:1 with the owner: read + send (required)" ;;
+    claude) echo "Being | Claude Code seat on this box" ;;
+    memory) echo "local | memory search: read + write notes" ;;
+    teammate_chats) echo "Being | Teams chats with teammates: reply in their own chat" ;;
+    group_chats) echo "Being | Teams group chats and channels: read + post" ;;
+    being_mail) echo "Being | its own mailbox: read + send" ;;
+    being_onedrive) echo "Being | its own OneDrive: upload + share by name" ;;
+    presence) echo "Being | Teams presence and photo" ;;
+    codex) echo "Being | Codex login on this box" ;;
+    owner_teams_read) echo "Owner | owner's Teams, read only" ;;
+    owner_teams_send) echo "Owner | owner's Teams, send after approval" ;;
+    owner_mail_read) echo "Owner | owner's mail, read only" ;;
+    owner_mail_send) echo "Owner | owner's mail, send after approval" ;;
+    owner_files) echo "Owner | owner's files (OneDrive, SharePoint), read only" ;;
+    owner_web) echo "Owner | owner's Outlook/Teams web pages, read only" ;;
+    shared_mailbox_read) echo "Owner | shared mailbox, read only" ;;
+    shared_mailbox_send) echo "Owner | shared mailbox drafts and reviewed batch send" ;;
+    owner_channel_posts) echo "Owner | posts in one named channel as the owner, after a go" ;;
+    mail_rules) echo "Owner | pre-approved mail forwarding rules" ;;
+    area_approvers) echo "- | named people who can say "go" for one area" ;;
+    github_being) echo "Being | own GitHub account or repo-limited token" ;;
+    github_owner) echo "Owner | owner's GitHub login (very high risk)" ;;
+    azure_devops) echo "either | Azure DevOps pipelines and work items" ;;
+    cloud_cli) echo "either | cloud CLIs (very high risk)" ;;
+    kubernetes) echo "key | named Kubernetes clusters (very high risk)" ;;
+    notion) echo "Being | Notion integration" ;;
+    tunnel) echo "admin key at setup | Cloudflare tunnel for the box" ;;
+    cloudflare_api) echo "Owner token | whole Cloudflare account (very high risk)" ;;
+    app_keys) echo "key | single-app keys from the key folder" ;;
+    model_hubs) echo "key | model hub downloads" ;;
+    model_proxy) echo "key | local model proxy" ;;
+    vpn) echo "key | VPN to private networks" ;;
+    device_sync) echo "owner's laptop | owner device sync" ;;
+    desktop) echo "owner's laptop | <being>-desktop" ;;
+    *) return 1 ;;
+  esac
+}
 
 # ---- sign-in sessions --------------------------------------------------------
 # Four separate MSAL caches: Being Teams, Being Outlook, Owner Teams, Owner Outlook. They never share a file.
@@ -282,8 +287,8 @@ cmd_login() {
   local svc cache upn
   for svc in "${svcs[@]}"; do
     cache="$(session_cache "$side" "$svc")"; upn="$(session_upn "$side")"
-    [[ -n "$upn" ]] || { echo "set ${side^^}_UPN in $KIT/.env" >&2; exit 2; }
-    [[ -n "$cache" ]] || { echo "set the $side $svc cache path in $KIT/.env (${side^^}_CACHE)" >&2; exit 2; }
+    [[ -n "$upn" ]] || { echo "set $(tr a-z A-Z <<<"$side")_UPN in $KIT/.env" >&2; exit 2; }
+    [[ -n "$cache" ]] || { echo "set the $side $svc cache path in $KIT/.env ($(tr a-z A-Z <<<"$side")_CACHE)" >&2; exit 2; }
     mkdir -p "$(dirname "$cache")"; chmod 700 "$(dirname "$cache")" 2>/dev/null || true
     echo "== $side $svc session: sign in as $upn"
     (cd "$KIT" && node teams-login-device.mjs --upn "$upn" --cache "$cache" --scopes "${scopes:-$(session_scopes "$side" "$svc")}")
@@ -299,7 +304,7 @@ cmd_access() {
   if [[ -n "$f" ]]; then
     while IFS= read -r id; do
       [[ -n "$id" ]] || continue
-      printf '  %-18s %s\n' "$id" "${ACCESS_INFO[$id]:-(not in the kit menu; describe it in TOOLS.md)}"
+      printf '  %-18s %s\n' "$id" "$(access_info "$id" || echo "(not in the kit menu; describe it in TOOLS.md)")"
     done < <(access_list)
   fi
   echo
@@ -491,13 +496,13 @@ cmd_doctor() {
   fi
   if [[ -d "$CONFIG_DIR" ]]; then
     local real fs; real="$(readlink -f "$CONFIG_DIR")"
-    [[ "$(stat -c %a "$real")" == 700 ]] && ok "$CONFIG_DIR is 0700" || bad "$CONFIG_DIR should be 0700 (chmod 700)"
+    [[ "$(stat -c %a "$real" 2>/dev/null || stat -f %Lp "$real")" == 700 ]] && ok "$CONFIG_DIR is 0700" || bad "$CONFIG_DIR should be 0700 (chmod 700)"
     [[ "$real/" == "$WORKSPACE/"* ]] && bad "$CONFIG_DIR is inside the Being's repo; keep secrets outside it"
     fs="$(stat -f -c %T "$real" 2>/dev/null || true)"
     case "$fs" in ntfs*|fuseblk|vfat|msdos|exfat) bad "$CONFIG_DIR is on $fs: file modes are not enforced there" ;; esac
     for f in "$real"/*.env; do
       [[ -f "$f" ]] || continue
-      [[ "$(stat -c %a "$f")" == 600 ]] || bad "$f should be 0600"
+      [[ "$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")" == 600 ]] || bad "$f should be 0600"
     done
   else
     warn "no secrets folder $CONFIG_DIR (mkdir -m 700 it; one <app>.env per app, 0600)"

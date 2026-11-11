@@ -1199,7 +1199,7 @@ kit_launcher() {
   fi
 }
 
-kit_sha() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
+kit_sha() { { sha256sum "$1" 2>/dev/null || shasum -a 256 "$1" 2>/dev/null; } | cut -d' ' -f1; }   # macOS: shasum
 # kit_manifest_set <manifest> <name> <file>: record the installed hash of <name>.
 kit_manifest_set() {
   local t; t="$(mktemp)"
