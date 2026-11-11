@@ -1,0 +1,9 @@
+# Files installed by install.sh --with evolution over curl (path, or path +x). Keep in sync with git: tests/kit-audit.test.sh.
+README.md
+SKILL.md
+__init__.py
+config.py
+evolution_mixin.py
+evolve.py
+spawn.py
+ws_server.py

@@ -7,6 +7,7 @@ import { CONFIG_FILE, ABILITIES, loadConfig, abilityOn, paused } from './oa-conf
 import { checkStamp, separationProblems } from './sessions.mjs';
 import { kitEnv, ownerDelegate } from './kit-env.mjs';
 import { settings } from './owner-session.mjs';
+import { isM365Host } from './guards.mjs';
 
 export const NEEDS = { owner_teams_read: ['teams'], owner_teams_send_approved: ['teams'], owner_mail_read: ['outlook'],
   owner_mail_send_approved: ['outlook'], owner_files: ['browser'], owner_web_pages: ['browser'], shared_mailbox_read: ['outlook'],
@@ -25,6 +26,13 @@ const services = [...new Set(on.flatMap((a) => NEEDS[a]))];
 for (const svc of services) for (const [role, who] of [['being', s.beingUpn], ['owner', s.ownerUpn]]) {
   const p = checkStamp(s.state, role, svc, who);
   say(p ? 'WARN' : 'ok', p ? `${p}; abilities needing ${svc} stay blocked` : `${role} ${svc} session signed in on this box`);
+}
+// Browser abilities: the route fails at first use without playwright-core or with the example's placeholder hosts.
+if (on.some((a) => NEEDS[a].includes('browser'))) {
+  const hosts = ['my_host', 'root_host'].filter((k) => !isM365Host(cfg.owner_web?.[k] || ''));
+  say(hosts.length ? 'FAIL' : 'ok', hosts.length ? `[owner_web] ${hosts.join(', ')} not set to your tenant's SharePoint address (owner-access.toml)` : '[owner_web] hosts set');
+  let pw = true; try { await import('playwright-core'); } catch { pw = false; }
+  say(pw ? 'ok' : 'FAIL', pw ? 'playwright-core installed' : 'playwright-core missing: npm install --prefix <kit> playwright-core');
 }
 if (on.some((a) => NEEDS[a].some((x) => x !== 'browser')) && !ownerDelegate(env)) say('WARN', 'API abilities are on but BEING_OWNER_DELEGATE=1 / OWNER_CACHE are not set in the kit .env');
 // Same-box limit: on one OS user, anything running as the Being can read the owner's token cache and browser profile.

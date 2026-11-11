@@ -24,6 +24,8 @@ Protocol and Operations Kit versions move together: every release bumps `PROTOCO
 - Job and handler rules put the exact error in the blocker's logged-only argument, not in the "Why" line the owner reads.
 - Owner commands: `send draft 7`, `send D 7`, `send 7` and `drop|cancel|discard|delete|remove|ignore D7` are understood; `send D7 after lunch`, `send D7 and D8` or `skip D7 <reason>` are conversation, not an approval (before, the first draft was sent at once). A bare number never counts with words after it.
 - A new draft for the same chat, mail thread, or the same people within 30 minutes replaces the older pending ones: the prompt says so and the old ones can no longer be approved.
+- Components (`runner`, `owner-access`, `monitor`, `desktop`, `tunnel`, ...) install and update over curl and through `<being> update`: each ships a `kit-files.txt`, and its install hook runs from a fetched copy of the kit layout it needs. Before, a curl install stopped with "unknown --with component", so `<being> update` failed for every Being with a component.
+- `owner-access-doctor.mjs` fails a browser ability (`owner_files`, `owner_web_pages`) whose `[owner_web]` hosts are still the example's placeholders or whose `playwright-core` is missing, instead of reporting ok until first use.
 
 ## [0.5.0] - 2026-11-03 (kit 0.3.0)
 

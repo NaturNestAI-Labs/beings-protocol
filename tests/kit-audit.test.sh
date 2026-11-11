@@ -86,5 +86,25 @@ grep -q '^OOMPolicy=continue' "$H2/.config/systemd/user/nova-teams.service" 2>/d
   && grep -q '^OOMPolicy=continue' "$TK/systemd/being-teams.service.example" && ok "Teams unit keeps running after an OOM kill" \
   || bad "Teams unit OOMPolicy: $(grep -c OOMPolicy "$H2/.config/systemd/user/nova-teams.service" 2>&1)"
 
+# 5. Components install over curl and through <being> update (both fetch kit-files.txt): every list matches git.
+miss=""
+for d in "$REPO"/skills/*/; do c=$(basename "$d"); [[ $c == teams-kit || $c == memory ]] && continue
+  want=$(git -C "$REPO" ls-files -s -- "skills/$c/" | awk -v p="skills/$c/" '{f=$4; sub("^" p, "", f); if (f != "kit-files.txt") print ($1 == "100755" ? f " +x" : f)}' | LC_ALL=C sort)
+  have=$( { grep -v "^[[:space:]]*\(#\|$\)" "$d/kit-files.txt" 2>/dev/null || true; } | LC_ALL=C sort)
+  [[ -n $want && $want == "$have" ]] || miss+=" $c"
+done
+[[ -z $miss ]] && ok "every component ships a kit-files.txt that matches git" || bad "kit-files.txt missing or stale:$miss"
+D="$T/dl"; mkdir -p "$D" "$T/hc"; cp "$REPO/install.sh" "$D/"
+CW=teams-kit,owner-access,runner,monitor
+out=$(cd "$D" && HOME="$T/hc" BEINGS_BASE_URL="file://$REPO" timeout 180 bash "$D/install.sh" --global --name curlnova --no-memory --with "$CW" --yes 2>&1) && rc=0 || rc=$?
+[[ $rc == 0 && -x "$T/hc/beings/curlnova/ops/runner/being-job" && -f "$T/hc/beings/curlnova/ops/teams-kit/owner-access-doctor.mjs" ]] \
+  && ok "install over curl with skill components works" || bad "curl install --with $CW: rc $rc $(tail -2 <<<"$out")"
+out=$(cd "$T/hc/beings/curlnova" && HOME="$T/hc" BEINGS_BASE_URL="file://$REPO" timeout 180 bash "$D/install.sh" --update --name curlnova --with "$CW" --yes 2>&1) && rc=0 || rc=$?
+[[ $rc == 0 ]] && ok "update over curl with skill components works" || bad "curl update: rc $rc $(tail -2 <<<"$out")"
+hooks=$(grep -ohE '\$KIT_REPO/[A-Za-z0-9_./-]+' "$REPO"/skills/*/kit-install.sh "$REPO"/scripts/kit-lib.sh | sed 's#^\$KIT_REPO/##' | sort -u)
+sup=$(sed -n '/^KIT_HOOK_SUPPORT="/,/"$/p' "$REPO/install.sh"); nope=""
+for h in $hooks; do grep -qF "$h" <<<"$sup" || nope+=" $h"; done
+[[ -z $nope ]] && ok "everything a component hook reads from the kit is fetched for curl installs" || bad "not in KIT_HOOK_SUPPORT:$nope"
+
 echo "kit-audit: $([[ $fails == 0 ]] && echo 'all checks passed' || echo "$fails FAILED")"
 exit $(( fails > 0 ))

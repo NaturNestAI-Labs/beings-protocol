@@ -1,0 +1,5 @@
+# Files installed by install.sh --with tunnel over curl (path, or path +x). Keep in sync with git: tests/kit-audit.test.sh.
+README.md
+being-tunnel +x
+cloudflared-tunnel.service.example
+kit-install.sh +x

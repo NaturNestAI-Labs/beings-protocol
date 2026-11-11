@@ -1376,6 +1376,11 @@ component_files() {
   fi
 }
 
+# What component hooks use from the kit besides their own files (scripts/kit-lib.sh); fetched for curl installs.
+KIT_HOOK_SUPPORT="scripts/kit-lib.sh scripts/being-config templates/kit/units/being-heartbeat.service templates/kit/units/being-heartbeat.timer
+  templates/kit/units/being-poller.service templates/kit/units/being-session.service templates/kit/units/being-update.service
+  templates/kit/units/being-update.timer"
+
 # kit_component <name>: copy skills/<name>/ to ops/<name>/, then run its kit-install.sh hook (idempotent by contract).
 kit_component() {
   local c="$1" dst="ops/$1" line f flag
@@ -1389,18 +1394,32 @@ kit_component() {
   kit_ignore "$dst/.env"
   kit_ignore "$dst/node_modules/"
   print_step "Component ${BOLD}${c}${NC} in ${BOLD}${dst}/${NC}"
-  # In a checkout the hook runs from skills/<name>/ so it can reach scripts/ and templates/; curl installs use the copy.
-  local hook="$dst/kit-install.sh"
-  [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/skills/$c/kit-install.sh" ] && hook="$SCRIPT_DIR/skills/$c/kit-install.sh"
+  # In a checkout the hook runs from skills/<name>/ so it can reach scripts/ and templates/. Over curl it runs from a
+  # fetched copy of that layout (the component plus KIT_HOOK_SUPPORT), removed afterwards.
+  local hook="$dst/kit-install.sh" stage=""
+  if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/skills/$c/kit-install.sh" ]; then hook="$SCRIPT_DIR/skills/$c/kit-install.sh"
+  elif [ -f "$hook" ]; then
+    stage="$(mktemp -d)"
+    for f in $KIT_HOOK_SUPPORT; do mkdir -p "$stage/$(dirname "$f")"; fetch_or_copy_file "$f" "$stage/$f"; done
+    chmod 755 "$stage/scripts/being-config"
+    while IFS= read -r line; do
+      f="${line% +x}"; mkdir -p "$stage/skills/$c/$(dirname "$f")"; fetch_or_copy_file "skills/$c/$f" "$stage/skills/$c/$f"
+      [ "$f" != "$line" ] && chmod 755 "$stage/skills/$c/$f"
+    done < <(component_files "$c")
+    hook="$stage/skills/$c/kit-install.sh"
+  fi
   if [ -f "$hook" ]; then
     local upd=0; $UPDATE_MODE && upd=1
     if ! BEING_NAME="$BEING_NAME" OWNER_NAME="$OWNER_NAME" BEING_CONFIG_FILE="$CONFIG_FILE" BEING_ACCESS="$BEING_ACCESS" \
          BEING_KIT_UPDATE="$upd" BEING_KIT_VERSION="$KIT_VERSION" BEING_KIT_SOURCE="${SCRIPT_DIR:-$BASE_URL}" \
          bash "$hook" "$(pwd -P)" --name "$BEING_NAME"; then
-      echo "  Error: $hook failed; fix it and re-run install.sh --update" >&2
+      echo "  Error: ops/$c/kit-install.sh failed; fix it and re-run install.sh --update" >&2
+      [ -n "$stage" ] && rm -rf "$stage"
       exit 1
     fi
   fi
+  [ -n "$stage" ] && rm -rf "$stage"
+  return 0
 }
 
 # Guardrails for every Claude Code and Codex session of this OS user, in a marked block.
