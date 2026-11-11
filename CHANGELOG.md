@@ -17,6 +17,13 @@ Protocol and Operations Kit versions move together: every release bumps `PROTOCO
 - The watchdog writes why an alert or blocker could not be sent to the loop log, instead of failing silently.
 - Node tests no longer hand kit tools a live Being's `BEING_*`/`OWNER_*` settings (`test-env.mjs`, with a guard test).
 - Teams verification sends test messages only with explicit `--send`; `--no-send` remains supported for update jobs, and waiting for a reply requires `--send`.
+- Install and update URLs point to `NaturNestAI-Labs/beings-protocol` (the old address returns 404, so `<being> update` and the daily update check could not fetch anything). A Being installed earlier runs its first update once with `BEINGS_BASE_URL=https://raw.githubusercontent.com/NaturNestAI-Labs/beings-protocol/main <being> update`.
+- A Teams unit from an older kit (`ExecStart=being-teams up`) no longer hangs on start: `up`/`down`/`restart` run inside their own unit act directly instead of waiting on systemd. `being-teams doctor` and `verify.sh` fail such a unit (fix: `being-teams autostart on`).
+- Every watcher-loop step (sweep, mail, presence, retry, watchdog) runs under `BEING_STEP_TIMEOUT` (120 s) and Graph reads under `BEING_GRAPH_TIMEOUT_MS` (20 s), so one hung call cannot stall message detection. The Teams unit keeps running when one of its runs is killed for memory (`OOMPolicy=continue`).
+- `being-job` keeps an argument that holds newlines whole (a multi-line `bash -c` script ran only its first line). The runner's `being-job` also runs in a scope of its own when started from a unit.
+- Job and handler rules put the exact error in the blocker's logged-only argument, not in the "Why" line the owner reads.
+- Owner commands: `send draft 7`, `send D 7`, `send 7` and `drop|cancel|discard|delete|remove|ignore D7` are understood; `send D7 after lunch`, `send D7 and D8` or `skip D7 <reason>` are conversation, not an approval (before, the first draft was sent at once). A bare number never counts with words after it.
+- A new draft for the same chat, mail thread, or the same people within 30 minutes replaces the older pending ones: the prompt says so and the old ones can no longer be approved.
 
 ## [0.5.0] - 2026-11-03 (kit 0.3.0)
 

@@ -727,10 +727,19 @@ open(sys.argv[1],"w").writelines(ls)' "$batch" "$STATE" 2>>"$HLOG" || log "owner
     python3 - "$batch" "${OWNER_OID:-}" "$STATE/acked-ids.txt" <<'PY' | while IFS=$'\t' read -r verb id mid cid; do
 import json,sys,re
 f,owner,acked=sys.argv[1:4]; keep=[]
+# Same grammar as approval.mjs parseCommand (approve.mjs re-checks it): anything else goes to triage as conversation.
+CMD=re.compile(r"^(send|edit|save|skip|drop|cancel|discard|delete|remove|ignore)\s+(draft\s+)?(?:D\s?(\d+)|(\d+))\b\s*(.*)$", re.I|re.S)
+def cmd(t):
+    m=CMD.match(t)
+    if not m: return None
+    v0=m.group(1).lower(); v=v0 if v0 in ("send","edit","save") else "skip"; rest=m.group(5).strip()
+    if m.group(4) and not m.group(2) and (rest or v!=v0): return None
+    if v!="edit" and not re.match(r"^(?:please|pls|now|thanks|thank you)?[\s.!]*$", rest, re.I): return None
+    return (v, "D"+(m.group(3) or m.group(4)))
 for l in open(f):
     if not l.strip(): continue
     m=json.loads(l); t=(m.get("text") or "").strip()
-    c=re.match(r"^(send|skip|edit|save)\s+(D\d+)\b", t, re.I)
+    c=cmd(t)
     b=re.match(r"^(SEND|skip)(?:\s+(B\d+))?\s*$", t)   # batch: uppercase SEND [Bn] or skip Bn (send-batch.mjs)
     if b and b.group(1)=="skip" and not b.group(2): b=None
     u=re.match(r"^(UPDATE|skip)\s+v(\d+\.\d+\.\d+)\s*$", t)   # kit release offered by being-update; uppercase UPDATE only
@@ -738,7 +747,7 @@ for l in open(f):
     if owner and m.get("lane")!="owner" and m.get("fromId")==owner and m.get("chatType")=="oneOnOne" and (c or b or u) and m.get("messageId"):
         if u: print("kit-"+u.group(1).lower(), u.group(2), m["messageId"], m["chatId"], sep="\t")
         elif b: print("batch-"+b.group(1).lower(), b.group(2) or "-", m["messageId"], m["chatId"], sep="\t")
-        else: print(c.group(1).lower(), c.group(2).upper(), m["messageId"], m["chatId"], sep="\t")
+        else: print(c[0], c[1], m["messageId"], m["chatId"], sep="\t")
         open(acked,"a").write(m["messageId"]+"\n")
     else: keep.append(l)
 open(f,"w").writelines(keep)

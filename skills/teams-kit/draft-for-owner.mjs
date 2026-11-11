@@ -9,7 +9,7 @@ import { kitEnv, ownerDelegate } from './kit-env.mjs';
 import { logComms } from './comms-log.mjs';
 import { toHtml } from './fmt.mjs';
 import { findSecrets, findSecretsInFiles } from './secrets.mjs';
-import { chatLabel, fingerprint, renderPrompt, allocDraftId, COMMAND_RE } from './approval.mjs';
+import { chatLabel, fingerprint, renderPrompt, allocDraftId, COMMAND_RE, parseCommand, replacedBy, loadDrafts } from './approval.mjs';
 import { sendAsAccount } from './send-as.mjs';
 
 const SENDER = beingSender();   // the prompt is posted as the Being, never as the owner
@@ -30,7 +30,7 @@ if (standby()) fail('standby host: drafts disabled', 3);
 const leaked = [...findSecrets(`${subject}\n${re}\n${text}`), ...findSecretsInFiles(attach.map((a) => a.path))];
 if (leaked.length) fail(`blocked: draft looks like it contains secrets (${leaked.join(', ')}); not staged`, 3);
 // A draft that is itself a command ("send D8") would approve another draft once sent as the owner.
-if (COMMAND_RE.test(text)) fail('blocked: a draft cannot be an approval command; not staged', 3);
+if (COMMAND_RE.test(text) || parseCommand(text)) fail('blocked: a draft cannot be an approval command; not staged', 3);
 const OWNER = need('OWNER_UPN').toLowerCase();
 
 // The target label comes from Graph with the owner's sign-in, never from the caller.
@@ -60,6 +60,8 @@ const list = (s) => s.split(',').map((x) => x.trim()).filter(Boolean);
 const draft = isMail ? { id, kind: 'mail', to: list(to), cc: list(cc), subject, replyTo, re, text, attach }
   : { id, kind: 'teams', chatId, target, re, text, ...(as ? { as } : {}) };
 draft.fingerprint = fingerprint(draft);
+const replaces = replacedBy({ ...draft, created: new Date().toISOString() }, loadDrafts(DIR));
+if (replaces.length) draft.replaces = replaces;
 const file = path.join(DIR, `${id}.json`);
 const store = (extra) => writeFileSync(file, JSON.stringify({ ...draft, status: 'pending', created: new Date().toISOString(), ...extra }, null, 2), { mode: 0o600 });
 store({});
@@ -73,5 +75,10 @@ try {
   const sent = await g(`/chats/${chat.id}/messages`, { body: { body: { contentType: 'html', content: renderPrompt(draft, toHtml(text)) } } });
   store({ promptChatId: chat.id, promptMessageId: sent.id, promptAt: sent.createdDateTime || new Date().toISOString(), by: me.userPrincipalName });
 } catch (e) { fail(`draft ${id} stored but not delivered to the owner: ${e.message}`); }
+// Offered: the drafts it replaces can no longer be approved (approve.mjs names the replacement).
+for (const old of replaces) {
+  const f = path.join(DIR, `${old}.json`);
+  try { const o = JSON.parse(readFileSync(f, 'utf8')); if (o.status === 'pending') writeFileSync(f, JSON.stringify({ ...o, status: 'superseded', supersededBy: id, decided: new Date().toISOString() }, null, 2), { mode: 0o600 }); } catch {}
+}
 logComms({ channel: isMail ? 'mail' : 'teams', dir: 'draft', kind: 'for-owner', draftId: id, chatId, to: isMail ? draft.to : target, subject, text });
 console.log(id);

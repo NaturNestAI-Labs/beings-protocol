@@ -30,6 +30,7 @@ const stop = (msg) => { tell(msg); process.exit(1); };
 
 if (!existsSync(file)) stop(`I don't have a draft ${id}.`);
 const d = JSON.parse(readFileSync(file, 'utf8'));
+if (d.status === 'superseded') stop(`Draft ${id} was replaced by ${d.supersededBy}; nothing went out. Reply about ${d.supersededBy} instead.`);
 if (d.status !== 'pending') stop(`Draft ${id} is already ${d.status}.`);
 if (Date.now() - Date.parse(d.created) > MAX_AGE_H * 3600e3) stop(`Draft ${id} is older than ${MAX_AGE_H}h; ask me for a fresh one.`);
 const save = (status, extra = {}) => writeFileSync(file, JSON.stringify({ ...d, ...extra, status, decided: new Date().toISOString() }, null, 2), { mode: 0o600 });

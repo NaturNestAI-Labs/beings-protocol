@@ -4,7 +4,10 @@ import { mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { fingerprint, parseCommand, chatLabel, renderPrompt, checkCommand, checkPrompt, allocDraftId, PROMPT_MARK_RE } from './approval.mjs';
+import { fingerprint, parseCommand, chatLabel, renderPrompt, checkCommand, checkPrompt, allocDraftId, PROMPT_MARK_RE, COMMAND_RE, replacedBy } from './approval.mjs';
+import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const OWNER = 'owner-oid', BEING = 'being-oid', BEING_UPN = 'nova@example.test';
 const members = [{ userId: OWNER, email: 'sam@example.test', displayName: 'Sam' }, { userId: BEING, email: BEING_UPN, displayName: 'nova' }];
@@ -108,4 +111,67 @@ test('a reply to the owner\'s own sent mail goes to that mail\'s recipients, not
   assert.deepEqual(replyRecipients({ ...sent, from: r('kim@example.test') }, 'sam@example.test', {}), {});
   assert.deepEqual(replyRecipients({ from: r('sam@example.test'), toRecipients: [] }, 'sam@example.test', {}), {});
   assert.deepEqual(replyRecipients(null, 'sam@example.test', {}), {});
+});
+
+// Owner wording seen in the field: what counts as a command, and what is ordinary conversation.
+const WORDS = [
+  ['send D7', ['send', 'D7']], ['Send d7.', ['send', 'D7']], ['send D7 please', ['send', 'D7']],
+  ['send draft 105', ['send', 'D105']], ['send draft D105', ['send', 'D105']], ['send D 105', ['send', 'D105']], ['send 105', ['send', 'D105']],
+  ['drop D104', ['skip', 'D104']], ['cancel d5', ['skip', 'D5']], ['discard draft 6', ['skip', 'D6']], ['save D9', ['save', 'D9']],
+  ['edit D7 Friday works', ['edit', 'D7']], ['edit draft 3 new text', ['edit', 'D3']],
+  ['send D7 after lunch', null], ['send D7 and D8', null], ['skip D3 not needed', null], ['send D7 but change the subject', null],
+  ['remove 3 cameras', null], ['remove 3', null], ['edit 3 lines', null], ['send 3 photos to Kim', null], ['105', null],
+  ['D105', null], ['sendD7', null], ['send D7x', null], ['please send D7', null],
+];
+
+test('owner command wording: field forms parse, qualified or bare-number text is not a command', () => {
+  for (const [t, want] of WORDS) {
+    const c = parseCommand(t);
+    assert.deepEqual(c && [c.verb, c.id], want, t);
+  }
+  assert.equal(parseCommand('edit D7 Friday works').rest, 'Friday works');
+});
+
+test('a command qualified with more words never passes the Graph check as the bare command', () => {
+  assert.match(check({ msg: cmd('send D7 after lunch') }), /command text does not match/);
+  assert.equal(check({ msg: cmd('send draft 7') }), null);
+  assert.equal(check({ msg: cmd('drop D7'), verb: 'skip' }), null);
+});
+
+test('the handler routes exactly the same owner words as approval.mjs (one grammar)', () => {
+  const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'being-handle'), 'utf8');
+  const py = /^CMD=re\.compile[\s\S]*?^    return \(v, .*$/m.exec(src)?.[0];
+  assert.ok(py, 'grammar block not found in being-handle');
+  const r = spawnSync('python3', ['-c', `import json,re,sys\n${py}\nprint(json.dumps([cmd(t) for t in json.load(sys.stdin)]))`],
+    { input: JSON.stringify(WORDS.map((w) => w[0])), encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout).map((x) => x && [x[0], x[1]]), WORDS.map((w) => w[1]));
+});
+
+test('a draft whose text is itself a command is caught, ordinary text with numbers is not', () => {
+  for (const t of ['send D8', 'send draft D8 now', 'drop D3']) assert.ok(COMMAND_RE.test(t) || parseCommand(t), t);
+  for (const t of ['send 3 photos to Kim', 'Remove 3 cameras from the list']) assert.ok(!COMMAND_RE.test(t) && !parseCommand(t), t);
+});
+
+test('a re-draft for the same chat or thread replaces the older live drafts; others stay', () => {
+  const at = (m) => new Date(now - m * 60e3).toISOString();
+  const all = [
+    { id: 'D1', kind: 'teams', chatId: 'c1', status: 'pending', created: at(50) },
+    { id: 'D2', kind: 'teams', chatId: 'c2', status: 'pending', created: at(40) },
+    { id: 'D3', kind: 'teams', chatId: 'c1', status: 'sent', created: at(30) },
+    { id: 'D4', kind: 'mail', to: ['a@x.test'], subject: 'WFH 11 Nov', status: 'pending', created: at(10) },
+    { id: 'D5', kind: 'mail', to: ['b@x.test'], subject: 'Other', status: 'pending', created: at(5) },
+    { id: 'D6', kind: 'mail', to: ['a@x.test'], subject: 'Old', status: 'pending', created: at(120) },
+    { id: 'D7', kind: 'mail', to: ['a@x.test'], replyTo: 'm1', status: 'pending', created: at(200) },
+  ];
+  assert.deepEqual(replacedBy({ id: 'D9', kind: 'teams', chatId: 'c1' }, all, now), ['D1']);
+  // changed subject, same person, minutes later: a re-draft (D104 -> D105 on 11 Nov)
+  assert.deepEqual(replacedBy({ id: 'D9', kind: 'mail', to: ['A@x.test'], subject: 'WFH 11-13 Nov' }, all, now), ['D4']);
+  assert.deepEqual(replacedBy({ id: 'D9', kind: 'mail', to: ['a@x.test'], replyTo: 'm1' }, all, now), ['D7']);
+  assert.deepEqual(replacedBy({ id: 'D9', kind: 'teams', chatId: 'c1', as: 'kim@x.test' }, all, now), []);
+});
+
+test('the prompt names the drafts a new one replaces', () => {
+  const d = { ...draft(), replaces: ['D5', 'D6'] };
+  assert.match(renderPrompt(d, '<p>x</p>'), /Replaces:<\/i> D5, D6/);
 });

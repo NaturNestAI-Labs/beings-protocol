@@ -1,12 +1,19 @@
 // Draft approval rules shared by draft-for-owner.mjs and approve.mjs; small functions so they are unit-tested.
 // A draft is sent only when the owner's own Teams message approves it and the prompt they saw matches the stored draft.
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { strip } from './strip.mjs';
 
 export const MAX_AGE_H = 24;
-export const COMMAND_RE = /^(send|skip|edit|save)\s+(D\d+)\b\s*([\s\S]*)$/i;
+// Owner commands: "send D7", "send draft 7", "drop D7" (drop, cancel, discard, delete, remove, ignore = skip), "edit D7 <text>".
+// A bare number counts only alone, after send/skip/save/edit ("remove 3" is not one); send/save/skip with more words
+// ("send D7 after lunch") is not a command.
+const SKIP_WORDS = 'skip|drop|cancel|discard|delete|remove|ignore';
+const CMD_RE = new RegExp(`^(send|edit|save|${SKIP_WORDS})\\s+(draft\\s+)?(?:D\\s?(\\d+)|(\\d+))\\b\\s*([\\s\\S]*)$`, 'i');
+const TAIL_OK = /^(?:please|pls|now|thanks|thank you)?[\s.!]*$/i;
+// Text that reads as a command for a named draft: a draft with it would approve another draft once sent as the owner.
+export const COMMAND_RE = new RegExp(`^(send|edit|save|${SKIP_WORDS})\\s+(?:draft\\s+)?D\\s?\\d+\\b`, 'i');
 // Marker that only draft-for-owner may post; teams-send-dm.mjs refuses bodies that carry it.
 export const PROMPT_MARK_RE = /\bfingerprint\s+[0-9a-f]{12}\b/i;
 
@@ -27,8 +34,30 @@ export function allocDraftId(dir) {
 }
 
 export function parseCommand(text) {
-  const m = COMMAND_RE.exec(String(text || '').trim());
-  return m ? { verb: m[1].toLowerCase(), id: m[2].toUpperCase(), rest: m[3].trim() } : null;
+  const m = CMD_RE.exec(String(text || '').trim());
+  if (!m) return null;
+  const v = m[1].toLowerCase(), verb = ['send', 'edit', 'save'].includes(v) ? v : 'skip', rest = m[5].trim();
+  if (m[4] && !m[2] && (rest || verb !== v)) return null;
+  if (verb !== 'edit' && !TAIL_OK.test(rest)) return null;
+  return { verb, id: `D${m[3] || m[4]}`, rest: verb === 'edit' ? rest : '' };
+}
+
+// A newer draft for the same chat (or mail thread) replaces the older live ones, so a stale one cannot be approved.
+// New mails count as one thread only when written to the same people within 30 min (a re-draft, not a second mail).
+const REDRAFT_MS = 30 * 60e3;
+const who = (d) => [].concat(d.to || []).map((x) => String(x).toLowerCase()).sort().join(',');
+const thread = (d) => (d.kind === 'mail' ? `mail|${d.replyTo ? `r:${d.replyTo}` : 'new'}|${who(d)}` : `teams|${d.chatId}|${d.as || ''}`);
+const num = (id) => Number(String(id).slice(1));
+export function replacedBy(draft, drafts, now = Date.now()) {
+  return drafts.filter((d) => d.id !== draft.id && num(d.id) < num(draft.id) && d.status === 'pending'
+    && now - Date.parse(d.created) <= MAX_AGE_H * 3600e3 && thread(d) === thread(draft)
+    && (draft.kind !== 'mail' || draft.replyTo || now - Date.parse(d.created) < REDRAFT_MS)).map((d) => d.id).sort((a, b) => num(a) - num(b));
+}
+export function loadDrafts(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((f) => /^D\d+\.json$/.test(f)).flatMap((f) => {
+    try { const d = JSON.parse(readFileSync(path.join(dir, f), 'utf8')); return d.id ? [d] : []; } catch { return []; }
+  });
 }
 
 // Human label for a chat, built from Graph data (never from a model-supplied label).
@@ -50,6 +79,7 @@ export function renderPrompt(d, bodyHtml) {
       + (d.attach.length ? `<p><i>Attachments:</i> ${esc(d.attach.map((a) => `${a.name} (${Math.round(a.size / 1024)} KB)`).join(', '))}</p>` : '')
     : `<p><b>Draft ${d.id}</b>: reply ${d.as ? `as <b>${esc(d.as)}</b> (not you)` : 'as you'} in <b>${esc(d.target)}</b></p>`;
   return head + (d.re ? `<p><i>They wrote:</i> “${esc(d.re.slice(0, 300))}”</p>` : '') + '<hr>' + bodyHtml + '<hr>'
+    + (d.replaces?.length ? `<p><i>Replaces:</i> ${esc(d.replaces.join(', '))} (no longer sendable)</p>` : '')
     + `<p>Reply <b>send ${d.id}</b> · <b>edit ${d.id} &lt;new text&gt;</b> · <b>skip ${d.id}</b>${isMail ? ` · <b>save ${d.id}</b>` : ''}`
     + ` · fingerprint ${d.fingerprint}</p>`;
 }
