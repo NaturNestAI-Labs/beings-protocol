@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # kit-lib.sh: shared helpers for skills/*/kit-install.sh (sourced, not run).
 # Additive installs: missing files are added, identical ones kept, changed upstream files staged in .kit-upgrade/.
 

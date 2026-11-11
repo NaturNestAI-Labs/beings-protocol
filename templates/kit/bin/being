@@ -182,7 +182,7 @@ access_info() {
     shared_mailbox_send) echo "Owner | shared mailbox drafts and reviewed batch send" ;;
     owner_channel_posts) echo "Owner | posts in one named channel as the owner, after a go" ;;
     mail_rules) echo "Owner | pre-approved mail forwarding rules" ;;
-    area_approvers) echo "- | named people who can say "go" for one area" ;;
+    area_approvers) echo "- | named people who can say \"go\" for one area" ;;
     github_being) echo "Being | own GitHub account or repo-limited token" ;;
     github_owner) echo "Owner | owner's GitHub login (very high risk)" ;;
     azure_devops) echo "either | Azure DevOps pipelines and work items" ;;
@@ -205,7 +205,8 @@ access_info() {
 # Four separate MSAL caches: Being Teams, Being Outlook, Owner Teams, Owner Outlook. They never share a file.
 load_kit_env() {
   [[ -f "$KIT/.env" ]] || { echo "no Teams kit .env at $KIT (install.sh --with teams-kit)" >&2; return 1; }
-  set -a; . "$KIT/.env"; set +a   # shellcheck source=/dev/null
+  # shellcheck source=/dev/null
+  set -a; . "$KIT/.env"; set +a
 }
 session_cache() {   # session_cache <being|owner> <teams|outlook>
   local base
